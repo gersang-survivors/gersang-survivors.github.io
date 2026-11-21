@@ -299,7 +299,34 @@ async function decodeWebp(b64) {
     }
     return out;
   }
-  const img = new Image(); img.src = 'data:image/webp;base64,' + b64; await img.decode(); return [img];
+  return splitAnimatedWebp(bytes);
+}
+// 冇 ImageDecoder（例如 iPhone Safari）：自己拆動畫 WebP 嘅 ANMF 格，逐格砌返做靜態 WebP 再合成
+async function splitAnimatedWebp(bytes) {
+  const dv = new DataView(bytes.buffer), str = (o, n) => String.fromCharCode(...bytes.subarray(o, o + n)), u24 = o => bytes[o] | (bytes[o + 1] << 8) | (bytes[o + 2] << 16);
+  let cw = 0, ch = 0; const frames = [];
+  for (let o = 12; o + 8 <= bytes.length;) {
+    const id = str(o, 4), size = dv.getUint32(o + 4, true), body = o + 8;
+    if (id === 'VP8X') { cw = u24(body + 4) + 1; ch = u24(body + 7) + 1; }
+    else if (id === 'ANMF') frames.push({ x: u24(body) * 2, y: u24(body + 3) * 2, w: u24(body + 6) + 1, h: u24(body + 9) + 1, flags: bytes[body + 15], data: bytes.subarray(body + 16, body + size) });
+    o = body + size + (size & 1);
+  }
+  if (!frames.length) { const img = new Image(); img.src = URL.createObjectURL(new Blob([bytes], { type: 'image/webp' })); await img.decode(); return [img]; }
+  const [work, wg] = canvas(cw, ch), out = [];
+  let prev = null;
+  for (const f of frames) {
+    if (prev && (prev.flags & 1)) wg.clearRect(prev.x, prev.y, prev.w, prev.h);
+    const hasAlpha = str(f.data.byteOffset - bytes.byteOffset, 4) === 'ALPH';
+    const vp8x = new Uint8Array(18); vp8x.set([86, 80, 56, 88, 10, 0, 0, 0, hasAlpha ? 0x10 : 0, 0, 0, 0]);
+    const w1 = f.w - 1, h1 = f.h - 1; vp8x.set([w1 & 255, (w1 >> 8) & 255, (w1 >> 16) & 255, h1 & 255, (h1 >> 8) & 255, (h1 >> 16) & 255], 12);
+    const total = 4 + vp8x.length + f.data.length, head = new Uint8Array(12); head.set([82, 73, 70, 70, total & 255, (total >> 8) & 255, (total >> 16) & 255, (total >> 24) & 255, 87, 69, 66, 80]);
+    const img = new Image(); img.src = URL.createObjectURL(new Blob([head, vp8x, f.data], { type: 'image/webp' }));
+    try { await img.decode(); } catch { continue; }
+    if (f.flags & 2) wg.clearRect(f.x, f.y, f.w, f.h);
+    wg.drawImage(img, f.x, f.y); URL.revokeObjectURL(img.src);
+    const [c, g] = canvas(cw, ch); g.drawImage(work, 0, 0); out.push(c); prev = f;
+  }
+  return out;
 }
 function loadAnim(dir, id) {
   const key = dir + id;
