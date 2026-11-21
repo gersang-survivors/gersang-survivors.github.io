@@ -37,7 +37,7 @@ for k, v in sel.items():
         'legend': bool(v.get('legend')),
         'to': [{'id': t['id'], 'k': t['k'], 'lv': t.get('lv')} for t in v.get('to', [])],
         'from': [{'id': f['id'], 'k': f['k'], 'lv': f.get('lv'), 'items': f.get('items', [])} for f in v.get('from', [])],
-        'hire': bool(v.get('hire')),
+        'hire': bool(v.get('hire')), 'rot': v.get('rot'), 'idl': v.get('idl'),
     }
 # referenced-but-foreign mercs (for showing locked recipe ingredients)
 foreign = {}
@@ -62,7 +62,7 @@ for zn, ids in zones.items():
     for i in ids:
         m = MO[i]
         mons.append({'id': i, 'zh': m['zh'], 'hp': m['hp'], 'exp': m.get('exp') or 1, 'atk': parse_atk(m.get('atk')),
-                     'move': m.get('move'), 'drops': [[x['i'], float(re.sub(r'[^0-9.]','',str(x.get('p','1')) ) or 1) / 100] for x in m.get('drops', []) if x.get('i') in IT]})
+                     'move': m.get('move'), 'rot': m.get('rot'), 'idl': m.get('idl'), 'drops': [[x['i'], float(re.sub(r'[^0-9.]','',str(x.get('p','1')) ) or 1) / 100] for x in m.get('drops', []) if x.get('i') in IT]})
     mons.sort(key=lambda x: x['hp'])
     # regular = lower part, bosses = big outliers
     reg = [x for x in mons if x['hp'] <= med * 4] or mons[:1]
@@ -98,7 +98,18 @@ for k, it in IT.items():
 groups = {g: sorted(c for c in weapon_groups[g] if 'gu' + c in mercs or g in ('C_Main','C_Main2nd')) for g in {i['only'] for i in items.values() if i['only']} if g in weapon_groups}
 
 expt = [[r[0], r[1]] for r in d['lv'][:200]]
-data = {'mercs': mercs, 'foreign': foreign, 'zones': zone_list, 'items': items, 'groups': groups, 'exp': expt}
+S = d['sys2']
+forms = [{'n': f['n'], 'desc': f['desc'], 'lv': [l['e'] for l in f['lv'][:5]]} for f in S['form']]
+spirits = [{'zh': x['zh'], 'el': x['el'], 'gr': x['gr'], 'sk': x['sk']['zh']} for x in S['spirits']]
+combos = []
+for c in S['combo']:
+    sets = [ids for nat, ids in c['sets'] if all(i in mercs for i in ids)]
+    if sets: combos.append({'n': c['n'], 'desc': c['desc'], 'cd': c['cd'], 'sets': sets})
+cons = {}
+for k, it in IT.items():
+    if it['zh'] in ('人蔘', '人蔘酒', '崔家藥丸') and it.get('cat') == '使用道具':
+        cons[k] = {'zh': it['zh'], 'desc': it.get('desc', '').split('\n')[0], 'p': price(it)}
+data = {'mercs': mercs, 'foreign': foreign, 'zones': zone_list, 'items': items, 'groups': groups, 'exp': expt, 'forms': forms, 'spirits': spirits, 'combos': combos, 'cons': cons}
 open(out, 'w').write('// 由 tools/extract.py 從 gersang-wiki/data.json 生成，唔好手改\nexport default ' + json.dumps(data, ensure_ascii=False, separators=(',', ':')) + ';\n')
 print(len(mercs), 'mercs', len(foreign), 'foreign', len(zone_list), 'zones', len(items), 'items', 'wts', wts)
 for z in zone_list: print(z['zh'], round(z['med']), [m['zh'] for m in z['reg']], '| boss', [m['zh'] for m in z['boss']])

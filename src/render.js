@@ -223,6 +223,10 @@ export function mercSprite(id, m, frame) {
 export function monsterSprite(mon, frame) { return sprite(`mon_${mon.id}_${frame}`, () => outline(creature(mon.zh, frame))); }
 export function peddlerSprite(frame) { return sprite(`peddler_${frame}`, () => outline(humanoid({ robe: '#3a7a5a', hat: 'gat', weapon: 'none', cape: '#c0a060' }, frame))); }
 export function portrait(id, m) {
+  if (LOCAL.on) {
+    const f = localFrame(m.rot, m.idl, false, 0, 0, -1);
+    if (f) { const k = `lportrait_${id}`; let u = cache.get(k); if (!u) { const [c, g] = canvas(f.img.width, f.img.height); g.drawImage(f.img, 0, 0); u = c.toDataURL(); cache.set(k, u); } return u; }
+  }
   const key = `portrait_${id}`;
   let url = cache.get(key);
   if (!url) {
@@ -273,4 +277,47 @@ export function drawGround(ctx, camX, camY, w, h, theme) {
     const r = hash(tx * 7 + 3, ty * 13 + 1);
     if (r > 0.96) ctx.drawImage(decoSprite(theme.deco, r > 0.99 ? 2 : r > 0.975 ? 1 : 0), tx * TILE - camX, ty * TILE - camY - 24, 48, 72);
   }
+}
+
+// ---------------- 本機原作素材模式（只限自己部電腦） ----------------
+// 將巨商百科 repo 嘅 rp/、ip/ 兩個資料夾複製入 assets-local/，遊戲就會用原作動畫圖；
+// assets-local/ 已列入 .gitignore，永遠唔會上傳。冇呢兩個資料夾就照用原創像素圖。
+export const LOCAL = { on: false };
+const files = new Map(), anims = new Map();
+export async function detectLocalArt() {
+  try { const r = await fetch('assets-local/rp/0.json', { method: 'HEAD', cache: 'no-store' }); LOCAL.on = r.ok; } catch { LOCAL.on = false; }
+  return LOCAL.on;
+}
+async function decodeWebp(b64) {
+  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  if (typeof ImageDecoder !== 'undefined') {
+    const dec = new ImageDecoder({ data: bytes, type: 'image/webp' });
+    await dec.tracks.ready; const n = dec.tracks.selectedTrack.frameCount, out = [];
+    for (let i = 0; i < n; i++) {
+      const { image } = await dec.decode({ frameIndex: i });
+      const [c, g] = canvas(image.displayWidth, image.displayHeight); g.drawImage(image, 0, 0); image.close(); out.push(c);
+    }
+    return out;
+  }
+  const img = new Image(); img.src = 'data:image/webp;base64,' + b64; await img.decode(); return [img];
+}
+function loadAnim(dir, id) {
+  const key = dir + id;
+  if (anims.has(key)) return anims.get(key);
+  anims.set(key, null);
+  const file = `${dir}/${id % (dir === 'rp' ? 100 : 40)}.json`;
+  let fp = files.get(file);
+  if (!fp) { fp = fetch('assets-local/' + file).then(r => r.ok ? r.json() : {}).catch(() => ({})); files.set(file, fp); }
+  fp.then(j => j[id] ? decodeWebp(j[id]) : null).then(fr => anims.set(key, fr || false)).catch(() => anims.set(key, false));
+  return null;
+}
+// 8 方向次序（順時針由正面開始）：下、左下、左、左上、上、右上、右、右下
+export function dirIndex(vx, vy) { const deg = Math.atan2(vy, vx) * 180 / Math.PI; return ((Math.round((deg - 90) / 45) % 8) + 8) % 8; }
+// returns {img, flip} or null
+export function localFrame(rot, idl, moving, dir, t, face) {
+  if (!LOCAL.on) return null;
+  if (moving && rot != null) { const fr = loadAnim('rp', rot); if (fr) return { img: fr[dir % fr.length], flip: false }; }
+  if (idl != null) { const fr = loadAnim('ip', idl); if (fr) return { img: fr[Math.floor(t * 8) % fr.length], flip: face > 0 }; }
+  if (rot != null) { const fr = loadAnim('rp', rot); if (fr) return { img: fr[(face > 0 ? 7 : 1) % fr.length], flip: false }; }
+  return null;
 }

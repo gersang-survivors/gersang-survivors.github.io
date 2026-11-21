@@ -1,5 +1,5 @@
 import { GS, M, mercName, itemName, RUN_SECONDS, MID_BOSS_AT, combatStats, styleOf, skillEffect, SKILL_CD, enemyStats, TAMEABLE, levelFromExp, partySize, STYLE_NAME } from './rules.js';
-import { drawGround, zoneTheme, mercSprite, monsterSprite, peddlerSprite, loadLocalPack, SCALE } from './render.js';
+import { drawGround, zoneTheme, mercSprite, monsterSprite, peddlerSprite, loadLocalPack, SCALE, detectLocalArt, localFrame, dirIndex, LOCAL } from './render.js';
 import { save, persist, openCamp, applyRunResult, hasSave, openNewGame } from './camp.js';
 
 const cv = document.getElementById('game');
@@ -53,31 +53,48 @@ function makeUnit(rec, isHero) {
     skills: (m.sk || []).map(s => ({ ...s, fx: skillEffect(s), cd: rand(2, SKILL_CD[skillEffect(s)]) })) };
 }
 
-// ---------------- 陣法・寶物・兵種羈絆 ----------------
-const FORMATIONS = {
-  crane: { name: '鶴翼陣', desc: '全隊射程 +15%，陣形展開', max: 3 },
-  fish: { name: '魚鱗陣', desc: '主角受到傷害 -12%', max: 3 },
-  snake: { name: '長蛇陣', desc: '全隊攻擊速度 +10%', max: 3 },
-  bagua: { name: '八卦陣', desc: '主角周圍結界：減速兼持續傷害', max: 3 },
-  crescent: { name: '偃月陣', desc: '近戰傷害 +20%、擊退加強', max: 3 },
-};
-const RELICS = {
-  powder: { name: '火藥桶', desc: '投射物命中時爆炸（範圍傷害）' },
-  tortoise: { name: '玄武甲', desc: '最大血量 +30%，每秒回復 1%' },
-  eye: { name: '千里眼', desc: '射程 +25%，拾取範圍 +50%' },
-  thunder: { name: '雷符', desc: '每 7 秒天雷轟擊 5 個敵人' },
-  scale: { name: '龍鱗', desc: '15% 機率造成 2.5 倍爆擊' },
-  cat: { name: '招財貓', desc: '銀兩收入 +50%' },
-};
-const has = k => game.relics.includes(k);
-const fLv = k => game.formations[k] || 0;
-const STYLE_GROUP = { arrow: 'bow', bullet: 'bow', coin: null, melee: 'melee', sweep: 'melee', orb: 'magic', needle: 'magic', porter: null };
-function synergy() {
-  const c = { bow: 0, melee: 0, magic: 0 };
-  for (const u of game.mercs) { const k = STYLE_GROUP[u.st.style]; if (k) c[k]++; }
-  return c;
+// ---------------- 巨商原作系統：陣型・精靈・合擊技（數值由 wiki data 轉換） ----------------
+const FORMS = GS.forms, SPIRITS = GS.spirits, COMBOS = GS.combos;
+// 陣型效果 → 遊戲數值（原作數值好細，按比例放大，係遊戲化改編）
+function formMods(f, lv) {
+  const m = {};
+  for (const [k, v] of f.lv[lv - 1]) {
+    if (k === '生命力') m.hp = (m.hp || 0) + v / 100;
+    else if (k === '打擊抵抗' || k === '法術抵抗') m.taken = (m.taken || 0) + v * 0.03;
+    else if (k === '攻擊力') m.dmg = (m.dmg || 0) + v / 400;
+    else if (k === '智力') m.magic = (m.magic || 0) + v / 200;
+    else if (k === '攻擊速度') m.spd = (m.spd || 0) + v / 100;
+    else if (k === '技能射程') m.range = (m.range || 0) + v * 0.1;
+    else if (k === '移動速度') m.move = (m.move || 0) + v / 100;
+    else if (k === '視野') m.magnet = (m.magnet || 0) + v * 0.1;
+  }
+  return m;
 }
-const SYN_TEXT = { bow: ['弓兵', '≥2 穿透 +1', '≥4 定時箭雨'], melee: ['近戰', '≥2 傷害 +20%', '≥4 命中回血'], magic: ['術士', '≥2 範圍 +40%', '≥4 技能冷卻 -25%'] };
+// 精靈效果：直接讀原作效果文字
+function spiritMods(sp) {
+  const t = sp.sk, m = {}, n = re => { const x = t.match(re); return x ? +x[1] : 0; };
+  m.spd = n(/我[軍方]的?攻擊速度增加(\d+)%/) / 100;
+  m.move = n(/我[軍方]的?(?:攻擊速度增加\d+%、)?移動速度增加(\d+)%/) / 100;
+  m.dmg = (n(/攻擊力(?:增加)?\s*(\d+)/) / 2000) + n(/傷害增加(\d+)%/) / 100;
+  m.slow = n(/敵人的攻擊速度減少\d+%、移動速度減少(\d+)%/) / 100;
+  m.taken = n(/打擊抵抗(?:提升|增加)(\d+)/) / 200 + n(/魔法抵抗(?:力)?(?:提升|增加)(\d+)/) / 300;
+  m.crit = n(/爆擊率增加(\d+)%/) / 100;
+  m.regen = n(/體力恢復(\d+)/) / 50000;
+  return m;
+}
+function computeMods() {
+  const g = game, m = { dmg: 1, magic: 1, spd: 1, range: 1, move: 1, magnet: 1, taken: 1, slow: 0, crit: 0, regen: 0 };
+  const add = x => { m.dmg += x.dmg || 0; m.magic += x.magic || 0; m.spd += x.spd || 0; m.range += x.range || 0; m.move += x.move || 0; m.magnet += x.magnet || 0; m.taken -= x.taken || 0; m.slow += x.slow || 0; m.crit += x.crit || 0; m.regen += x.regen || 0; };
+  if (g.form) add(formMods(FORMS[g.form.i], g.form.lv));
+  if (g.spirit != null) add(spiritMods(SPIRITS[g.spirit]));
+  m.taken = Math.max(0.3, m.taken); m.dmg *= 1 + g.bonusDmg;
+  return m;
+}
+function activeCombos() {
+  const ids = new Set(game.mercs.map(u => u.id));
+  return COMBOS.filter(c => c.sets.some(set => set.every(i => ids.has(i))));
+}
+const STYLE_GROUP = { arrow: 'bow', bullet: 'bow', melee: 'melee', sweep: 'melee', orb: 'magic', needle: 'magic' };
 
 export function startRun(zoneIdx) {
   const zone = GS.zones[zoneIdx];
@@ -89,7 +106,7 @@ export function startRun(zoneIdx) {
   game = {
     mode: 'play', zoneIdx, zone, theme: zoneTheme(zone.zh), t: 0, level: 1, xp: 0, xpNext: 5, pendingLevels: 0, kills: 0,
     silver: 0, exp: 0, loot: {}, tamed: [], porter: 0, deck: deck.filter(r => r !== first), fielded: first ? [first.uid] : [],
-    formations: {}, relics: [], chests: [], nextElite: 60, rainT: 6, thunderT: 7, auraT: 0, regenT: 0,
+    form: null, spirit: null, comboT: {}, chests: [], nextElite: 60, regenT: 0, mods: null,
     player: { x: 0, y: 0, hp: hero.st.hp, maxHp: hero.st.hp, speed: 150, inv: 0, face: 1, moving: false, anim: 0 },
     hero, mercs: party, temps: [], enemies: [], projs: [], gems: [], coins: [], fx: [], texts: [], fields: [],
     passives: {}, rerolls: 1 + Math.floor(levelFromExp(heroRec.exp) / 30), choices: [], spawnAcc: 0, boss: null, midDone: false, finalDone: false,
@@ -101,16 +118,14 @@ export function startRun(zoneIdx) {
 }
 
 function unitDmg(u) {
-  let m = (1 + 0.2 * u.atkUp) * (1 + 0.1 * (game.passives.rally || 0) + game.bonusDmg) * (game.buffT > 0 ? 1.25 : 1);
-  if (u.isHero) m *= 1 + 0.25 * (game.passives.coin || 0);
-  const grp = STYLE_GROUP[u.st.style], syn = game.syn || {};
-  if (grp === 'melee') { if (syn.melee >= 2) m *= 1.2; m *= 1 + 0.2 * fLv('crescent'); }
-  if (grp === 'magic' && syn.magic >= 2) m *= 1.15;
-  if (has('scale') && Math.random() < 0.15) m *= 2.5;
+  const md = game.mods || computeMods();
+  let m = (1 + 0.2 * u.atkUp) * md.dmg * (game.buffT > 0 ? 1.25 : 1);
+  if (STYLE_GROUP[u.st.style] === 'magic') m *= md.magic;
+  if (md.crit && Math.random() < md.crit) m *= 2;
   return u.st.dmg * m;
 }
-const unitCd = u => u.st.cd / (1 + 0.15 * u.spdUp) / (1 + 0.1 * fLv('snake'));
-const unitRange = (u, r) => r * (1 + 0.15 * fLv('crane')) * (has('eye') ? 1.25 : 1);
+const unitCd = u => u.st.cd / (1 + 0.15 * u.spdUp) / (game.mods ? game.mods.spd : 1);
+const unitRange = (u, r) => r * (game.mods ? game.mods.range : 1);
 
 // ---------------- combat ----------------
 function hitEnemy(e, dmg, kx = 0, ky = 0, kb = 0) {
@@ -154,9 +169,9 @@ function basicAttack(u, t) {
   u.face = dx < 0 ? -1 : 1; u.atkFx = 0.15;
   const P = (o) => game.projs.push(Object.assign({ x: u.x, y: u.y - 12, dmg, pierce: 1, hit: new Set() }, o));
   switch (u.st.style) {
-    case 'arrow': P({ vx: dx / l * 540, vy: dy / l * 540, life: 0.8, kind: 'arrow', pierce: 1 + Math.floor(u.rec.lv / 40) + ((game.syn || {}).bow >= 2 ? 1 : 0) }); break;
+    case 'arrow': P({ vx: dx / l * 540, vy: dy / l * 540, life: 0.8, kind: 'arrow', pierce: 1 + Math.floor(u.rec.lv / 40) }); break;
     case 'needle': for (const a of [-0.15, 0, 0.15]) { const c = Math.cos(a), s = Math.sin(a); P({ vx: (dx * c - dy * s) / l * 480, vy: (dx * s + dy * c) / l * 480, life: 0.6, kind: 'needle', dmg: dmg * 0.45 }); } break;
-    case 'orb': P({ vx: dx / l * 320, vy: dy / l * 320, life: 1.1, kind: 'orb', splash: 55 * ((game.syn || {}).magic >= 2 ? 1.4 : 1) }); break;
+    case 'orb': P({ vx: dx / l * 320, vy: dy / l * 320, life: 1.1, kind: 'orb', splash: 55 }); break;
     case 'bullet': P({ vx: dx / l * 800, vy: dy / l * 800, life: 0.6, kind: 'bullet', dmg: dmg * 1.6, pierce: 2 }); game.fx.push({ kind: 'flash', x: u.x + dx / l * 14, y: u.y - 12 + dy / l * 14, life: 0.08, max: 0.08 }); break;
     case 'coin': {
       const hit = new Set([t]); const n = 1 + Math.floor((game.passives.coin || 0) / 2);
@@ -201,11 +216,11 @@ function castSkill(u, sk) {
 function updateUnit(u, i, n, dt) {
   const p = game.player;
   u.cd -= dt; u.atkFx = Math.max(0, u.atkFx - dt);
-  for (const sk of u.skills) { sk.cd -= dt; if (sk.cd <= 0) { if (castSkill(u, sk)) sk.cd = SKILL_CD[sk.fx] * Math.max(0.4, 1 - 0.1 * u.skillLv) * ((game.syn || {}).magic >= 4 ? 0.75 : 1); else sk.cd = 1; } }
+  for (const sk of u.skills) { sk.cd -= dt; if (sk.cd <= 0) { if (castSkill(u, sk)) sk.cd = SKILL_CD[sk.fx] * Math.max(0.4, 1 - 0.1 * u.skillLv); else sk.cd = 1; } }
   if (u.isHero) { u.x = p.x; u.y = p.y; u.face = p.face; u.anim = p.anim;
     if (u.cd <= 0) { const t = nearestEnemy(p.x, p.y, unitRange(u, u.st.range || 280)); if (t) { u.cd = unitCd(u); basicAttack(u, t); } } return; }
   const ang = (i / Math.max(1, n)) * Math.PI * 2 + game.t * 0.2;
-  const spread = 1 + 0.25 * fLv('crane');
+  const spread = 1;
   let tx = p.x + Math.cos(ang) * 64 * spread, ty = p.y + Math.sin(ang) * 48 * spread, spd = Math.max(220, p.speed * 1.4);
   const style = u.st.style;
   if (style === 'melee' || style === 'sweep') {
@@ -218,8 +233,7 @@ function updateUnit(u, i, n, dt) {
         if (u.cd <= 0) {
           u.cd = unitCd(u); u.atkFx = 0.15; u.face = near.x < u.x ? -1 : 1;
           if (style === 'sweep') { game.fx.push({ kind: 'ring', x: u.x, y: u.y, r: 58, life: 0.2, max: 0.2 }); for (const e of game.enemies) if (!e.dead && dist2(e, u) < (58 + e.r) ** 2) hitEnemy(e, unitDmg(u) * 0.8, e.x - u.x, e.y - u.y, 16); }
-          else { game.fx.push({ kind: 'slash', x: near.x, y: near.y, life: 0.12, max: 0.12, f: u.face }); hitEnemy(near, unitDmg(u), near.x - u.x, near.y - u.y, 5 + 8 * fLv('crescent')); }
-          if ((game.syn || {}).melee >= 4) { const pl = game.player; pl.hp = Math.min(pl.maxHp, pl.hp + pl.maxHp * 0.004); }
+          else { game.fx.push({ kind: 'slash', x: near.x, y: near.y, life: 0.12, max: 0.12, f: u.face }); hitEnemy(near, unitDmg(u), near.x - u.x, near.y - u.y, 5); }
         }
       }
     }
@@ -227,7 +241,8 @@ function updateUnit(u, i, n, dt) {
     const t = nearestEnemy(u.x, u.y, unitRange(u, u.st.range || 260)); if (t) { u.cd = unitCd(u); basicAttack(u, t); }
   }
   const dx = tx - u.x, dy = ty - u.y, l = Math.hypot(dx, dy);
-  if (l > 4) { const s = Math.min(l, spd * dt * (l > 320 ? 3 : 1)); u.x += dx / l * s; u.y += dy / l * s; u.anim += dt * 2; if (Math.abs(dx) > 2) u.face = dx < 0 ? -1 : 1; }
+  u.moving = l > 4;
+  if (l > 4) { const s = Math.min(l, spd * dt * (l > 320 ? 3 : 1)); u.x += dx / l * s; u.y += dy / l * s; u.anim += dt * 2; u.dir = dirIndex(dx, dy); if (Math.abs(dx) > 2) u.face = dx < 0 ? -1 : 1; }
 }
 
 function separate() {
@@ -253,7 +268,7 @@ export function update(dt) {
   if (keys.has('d') || keys.has('arrowright')) mx += 1;
   if (stick.active) { mx = stick.dx; my = stick.dy; }
   const ml = Math.hypot(mx, my); p.moving = ml > 0.1;
-  if (p.moving) { const s = p.speed * (1 + 0.1 * (g.passives.speed || 0)) * Math.min(1, ml) / ml; p.x += mx * s * dt; p.y += my * s * dt; p.anim += dt * 2.5; if (Math.abs(mx) > 0.1) p.face = mx < 0 ? -1 : 1; }
+  if (p.moving) { p.dir = dirIndex(mx, my); const s = p.speed * (g.mods ? g.mods.move : 1) * Math.min(1, ml) / ml; p.x += mx * s * dt; p.y += my * s * dt; p.anim += dt * 2.5; if (Math.abs(mx) > 0.1) p.face = mx < 0 ? -1 : 1; }
   p.inv = Math.max(0, p.inv - dt);
 
   // spawns: weight monsters by run progress
@@ -273,7 +288,7 @@ export function update(dt) {
   if (!g.peddler && g.t >= g.nextPeddler) { const a = rand(0, Math.PI * 2); g.peddler = { x: p.x + Math.cos(a) * 320, y: p.y + Math.sin(a) * 320, life: 40, anim: 0 }; g.nextPeddler += 150; banner('行商人嚟咗！'); }
   if (g.peddler) { g.peddler.life -= dt; g.peddler.anim += dt; if (g.peddler.life <= 0) g.peddler = null; else if (dist2(g.peddler, p) < 34 * 34) openPeddler(); }
 
-  g.syn = synergy();
+  g.mods = computeMods();
   periodic(dt);
   updateUnit(g.hero, 0, 1, dt);
   const all = g.mercs.concat(g.temps);
@@ -286,9 +301,9 @@ export function update(dt) {
     if (e.dead) continue;
     e.flash = Math.max(0, e.flash - dt); e.slow = Math.max(0, e.slow - dt);
     const dx = p.x - e.x, dy = p.y - e.y, l = Math.hypot(dx, dy) || 1;
-    const s = e.speed * (e.slow > 0 ? 0.4 : 1) * dt; e.x += dx / l * s; e.y += dy / l * s; e.anim += dt * 2; e.face = dx < 0 ? -1 : 1;
+    const s = e.speed * (e.slow > 0 ? 0.4 : 1) * (1 - g.mods.slow) * dt; e.x += dx / l * s; e.y += dy / l * s; e.anim += dt * 2; e.face = dx < 0 ? -1 : 1; e.dir = dirIndex(dx, dy);
     if (l < e.r + 12 && p.inv <= 0) {
-      p.hp -= e.dmg * 100 / (100 + ac * 2) * (1 - 0.12 * fLv('fish')); p.inv = 0.45; g.fx.push({ kind: 'hurt', x: p.x, y: p.y, life: 0.2, max: 0.2 });
+      p.hp -= e.dmg * 100 / (100 + ac * 2) * g.mods.taken; p.inv = 0.45; g.fx.push({ kind: 'hurt', x: p.x, y: p.y, life: 0.2, max: 0.2 });
       if (p.hp <= 0) { endRun(false); return; }
     }
     if (l > 1400 && !e.boss) { const a = rand(0, Math.PI * 2), R = Math.hypot(W, H) / 2 + 40; e.x = p.x + Math.cos(a) * R; e.y = p.y + Math.sin(a) * R; }
@@ -302,11 +317,10 @@ export function update(dt) {
     pr.x += pr.vx * dt; pr.y += pr.vy * dt; pr.life -= dt;
     for (const e of g.enemies) {
       if (e.dead || pr.hit.has(e)) continue;
-      if (dist2(e, pr) < (e.r + (pr.kind === 'beam' ? 14 : 6)) ** 2) {
+      if (dist2(e, pr) < (e.r + (pr.kind === 'phoenix' ? 26 : pr.kind === 'beam' ? 14 : 6)) ** 2) {
         pr.hit.add(e);
         if (pr.splash) { g.fx.push({ kind: 'ring', x: pr.x, y: pr.y, r: pr.splash, life: 0.25, max: 0.25, col: '#b080ff' }); for (const o of g.enemies) if (!o.dead && dist2(o, pr) < pr.splash ** 2) hitEnemy(o, pr.dmg); }
         else hitEnemy(e, pr.dmg, pr.vx, pr.vy, pr.kind === 'bullet' ? 12 : 3);
-        if (has('powder') && pr.kind !== 'beam') { g.fx.push({ kind: 'ring', x: pr.x, y: pr.y, r: 40, life: 0.2, max: 0.2, col: '#ff9040' }); for (const o of g.enemies) if (!o.dead && o !== e && dist2(o, pr) < 40 * 40) hitEnemy(o, pr.dmg * 0.4); }
         if (--pr.pierce <= 0) { pr.life = 0; break; }
       }
     }
@@ -314,11 +328,11 @@ export function update(dt) {
   g.projs = g.projs.filter(pr => pr.life > 0);
   g.enemies = g.enemies.filter(e => !e.dead);
 
-  const magnet = 70 * (1 + 0.35 * (g.passives.magnet || 0)) * (1 + 0.3 * g.porter) * (has('eye') ? 1.5 : 1);
+  const magnet = 70 * (1 + 0.3 * g.porter) * g.mods.magnet;
   for (const list of [g.gems, g.coins]) for (const o of list) {
     const d2 = dist2(o, p);
     if (d2 < magnet * magnet || o.pull) { o.pull = true; const dx = p.x - o.x, dy = p.y - o.y, l = Math.hypot(dx, dy) || 1; o.x += dx / l * 520 * dt; o.y += dy / l * 520 * dt; }
-    if (d2 < 16 * 16) { o.got = true; if (list === g.gems) gainXp(o.v); else g.silver += Math.round(o.v * (has('cat') ? 1.5 : 1)); }
+    if (d2 < 16 * 16) { o.got = true; if (list === g.gems) gainXp(o.v); else g.silver += o.v; }
   }
   g.gems = g.gems.filter(o => !o.got); g.coins = g.coins.filter(o => !o.got);
   if (g.gems.length > 500) { const extra = g.gems.splice(0, g.gems.length - 400); g.gems.push({ x: extra[0].x, y: extra[0].y, v: extra.reduce((s, x) => s + x.v, 0), big: true }); }
@@ -338,22 +352,19 @@ function periodic(dt) {
   }
   for (const c of g.chests) if (!c.got && dist2(c, p) < 30 * 30) { c.got = true; openChest(); }
   g.chests = g.chests.filter(c => !c.got);
-  if (g.syn.bow >= 4 && (g.rainT -= dt) <= 0) {
-    g.rainT = 6; const t = nearestEnemy(p.x + rand(-150, 150), p.y + rand(-150, 150), 300);
-    if (t) { const bows = g.mercs.filter(u => STYLE_GROUP[u.st.style] === 'bow'); const dmg = bows.reduce((s, u) => s + unitDmg(u), 0) / bows.length * 3;
-      g.fx.push({ kind: 'ring', x: t.x, y: t.y, r: 100, life: 0.4, max: 0.4, col: '#e0d0a0' }); g.texts.push({ x: t.x, y: t.y - 40, v: '箭雨', life: 0.8, skill: true });
-      for (const e of g.enemies) if (!e.dead && dist2(e, t) < 100 * 100) hitEnemy(e, dmg); }
+  if (g.mods.regen && (g.regenT -= dt) <= 0) { g.regenT = 2; p.hp = Math.min(p.maxHp, p.hp + p.maxHp * g.mods.regen * 100); }
+  // 合擊技（原作：指定兩隻傭兵同時上場先會發動）
+  for (const c of activeCombos()) {
+    g.comboT[c.n] = (g.comboT[c.n] ?? 3) - dt;
+    if (g.comboT[c.n] > 0) continue;
+    g.comboT[c.n] = c.cd;
+    const t = nearestEnemy(p.x, p.y, 420); if (!t && c.n !== '堅固之盾') continue;
+    banner(`合擊技：${c.n}`);
+    if (c.n === '召喚不死鳥') {
+      const dx = t.x - p.x, dy = t.y - p.y, l = Math.hypot(dx, dy) || 1, dmg = g.mercs.reduce((s, u) => s + unitDmg(u), 0) * 2;
+      g.projs.push({ x: p.x, y: p.y - 20, vx: dx / l * 520, vy: dy / l * 520, life: 2, kind: 'phoenix', dmg, pierce: 999, hit: new Set() });
+    } else if (c.n === '堅固之盾') { g.buffT = 8; }
   }
-  if (has('thunder') && (g.thunderT -= dt) <= 0) {
-    g.thunderT = 7; const hit = new Set();
-    for (let i = 0; i < 5; i++) { const e = nearestEnemy(p.x + rand(-250, 250), p.y + rand(-250, 250), 300, hit); if (!e) break; hit.add(e); g.fx.push({ kind: 'strike', x: e.x, y: e.y, life: 0.25, max: 0.25 }); hitEnemy(e, unitDmg(g.hero) * 3); }
-  }
-  if (fLv('bagua')) {
-    const r = 100 + 20 * fLv('bagua'); g.auraR = r;
-    for (const e of g.enemies) if (!e.dead && dist2(e, p) < r * r) e.slow = 0.2;
-    if ((g.auraT -= dt) <= 0) { g.auraT = 0.5; for (const e of g.enemies) if (!e.dead && dist2(e, p) < r * r) hitEnemy(e, unitDmg(g.hero) * 0.25 * fLv('bagua')); }
-  }
-  if (has('tortoise') && (g.regenT -= dt) <= 0) { g.regenT = 1; p.hp = Math.min(p.maxHp, p.hp + p.maxHp * 0.01); }
 }
 function recruit(rec) {
   const g = game, u = makeUnit(rec, false); u.x = g.player.x + rand(-40, 40); u.y = g.player.y + rand(-40, 40);
@@ -364,21 +375,25 @@ function recruit(rec) {
 function gainXp(v) { const g = game; g.xp += v; while (g.xp >= g.xpNext) { g.xp -= g.xpNext; g.level++; g.pendingLevels++; g.xpNext = Math.floor(5 + g.level * 3 + Math.pow(g.level, 1.35)); } }
 
 // ---------------- in-run level-up ----------------
-const PASSIVES = {
-  hp: { name: '人蔘', desc: '最大血量 +20%，並回復', max: 5 },
-  speed: { name: '輕功', desc: '移動速度 +10%', max: 4 },
-  magnet: { name: '算盤', desc: '拾取範圍 +35%', max: 4 },
-  coin: { name: '主角修練', desc: '主角傷害 +25%', max: 5 },
-  rally: { name: '軍令', desc: '全隊傷害 +10%', max: 5 },
-};
 function recruitCard(rec) {
   const m = M(rec.id), st = combatStats(rec);
   return { t: 'recruit', rec, title: `招募 ${mercName(rec.id)}`, sub: `Lv ${rec.lv} ・ ${STYLE_NAME[st.style].split('・')[0]}`, desc: (m.sk || []).map(s => s.n.replace(/\(.*\)/, '')).join('・') || STYLE_NAME[st.style], tag: 'recruit', rec_id: rec.id };
 }
+function spiritCards(bonus) {
+  const maxGr = Math.min(5, 1 + Math.floor(game.t / 150) + bonus);
+  return SPIRITS.map((sp, i) => ({ sp, i })).filter(({ sp, i }) => sp.gr <= maxGr && i !== game.spirit && (game.spirit == null || sp.gr >= SPIRITS[game.spirit].gr))
+    .map(({ sp, i }) => ({ t: 'spirit', i, title: `精靈：${sp.zh}`, sub: `${sp.el} ・ ${sp.gr} 階${game.spirit != null ? `（取代 ${SPIRITS[game.spirit].zh}）` : ''}`, desc: sp.sk, tag: 'fuse' }));
+}
+function formCards() {
+  const g = game, out = [];
+  if (g.form) { if (g.form.lv < 5) { const f = FORMS[g.form.i]; out.push({ t: 'form', i: g.form.i, lv: g.form.lv + 1, title: `${f.n} 強化`, sub: `陣型 Lv ${g.form.lv} → ${g.form.lv + 1}`, desc: f.lv[g.form.lv].map(([k, v]) => `${k} +${v}`).join('、'), tag: 'job' }); } }
+  else FORMS.forEach((f, i) => out.push({ t: 'form', i, lv: 1, title: `佈陣：${f.n}`, sub: '陣型 Lv 1（只可以用一種）', desc: f.desc, tag: 'job' }));
+  return out;
+}
 function rareChoices() {
   const g = game, c = [];
   for (const rec of g.deck) c.push([recruitCard(rec), 4]);
-  for (const k in RELICS) if (!has(k) && g.relics.length < 5) c.push([{ t: 'relic', k, title: RELICS[k].name, sub: '寶物', desc: RELICS[k].desc, tag: 'fuse' }, 3]);
+  for (const sc of spiritCards(1)) c.push([sc, 3]);
   for (const u of [g.hero, ...g.mercs]) if (u.skills.length && u.skillLv < 5) c.push([{ t: 'awaken', u, title: `${mercName(u.id)} 技能覺醒`, sub: u.skills.map(s => s.n.replace(/\(.*\)/, '')).join('・'), desc: '技能等級 +2', tag: 'job' }, 2]);
   return c;
 }
@@ -392,9 +407,8 @@ function openChest() {
 function buildChoices() {
   const g = game, c = [];
   for (const rec of g.deck) c.push([recruitCard(rec), g.mercs.length < 3 ? 7 : 4]);
-  const nF = Object.keys(g.formations).length;
-  for (const k in FORMATIONS) if ((g.formations[k] || 0) < FORMATIONS[k].max && (g.formations[k] || nF < 2)) c.push([{ t: 'form', k, title: FORMATIONS[k].name, sub: `陣法 Lv ${fLv(k)} → ${fLv(k) + 1}`, desc: FORMATIONS[k].desc + (nF >= 1 && !g.formations[k] ? '（最多 2 個陣法）' : ''), tag: 'job' }, 2]);
-  for (const k in RELICS) if (!has(k) && g.relics.length < 5) c.push([{ t: 'relic', k, title: RELICS[k].name, sub: '寶物', desc: RELICS[k].desc, tag: 'fuse' }, 0.7]);
+  for (const fc of formCards()) c.push([fc, g.form ? 3 : 1]);
+  for (const sc of spiritCards(0)) c.push([sc, 0.4]);
   for (const u of [g.hero, ...g.mercs]) {
     if (u.st.style === 'porter') continue;
     const nm = mercName(u.id);
@@ -402,7 +416,6 @@ function buildChoices() {
     if (u.spdUp < 3) c.push([{ t: 'spd', u, title: `${nm} 攻速強化`, sub: `Lv ${u.spdUp} → ${u.spdUp + 1}`, desc: '攻擊速度 +15%' }, 2]);
     if (u.skills.length && u.skillLv < 3) c.push([{ t: 'skill', u, title: `${u.skills.map(s => s.n.replace(/\(.*\)/, '')).join('・')}`, sub: `${nm} 技能 Lv ${u.skillLv + 1}`, desc: '技能傷害 +40%、冷卻 -10%', tag: 'job' }, 3]);
   }
-  for (const k in PASSIVES) if ((g.passives[k] || 0) < PASSIVES[k].max) c.push([{ t: 'passive', k, title: PASSIVES[k].name, sub: `Lv ${g.passives[k] || 0} → ${(g.passives[k] || 0) + 1}`, desc: PASSIVES[k].desc }, 2]);
   const out = []; let guard = 0;
   const rc = c.filter(([x]) => x.t === 'recruit');
   if (rc.length && Math.random() < 0.6) out.push(pickWeighted(rc));
@@ -423,10 +436,9 @@ export function pickChoice(i) {
   else if (c.t === 'spd') c.u.spdUp++;
   else if (c.t === 'skill') c.u.skillLv++;
   else if (c.t === 'recruit') recruit(c.rec);
-  else if (c.t === 'form') g.formations[c.k] = fLv(c.k) + 1;
-  else if (c.t === 'relic') { g.relics.push(c.k); if (c.k === 'tortoise') { const add = Math.round(g.player.maxHp * 0.3); g.player.maxHp += add; g.player.hp += add; } }
+  else if (c.t === 'form') { g.form = { i: c.i, lv: c.lv }; const hp = Math.round(g.hero.st.hp * (1 + (formMods(FORMS[c.i], c.lv).hp || 0))); g.player.hp += Math.max(0, hp - g.player.maxHp); g.player.maxHp = hp; }
+  else if (c.t === 'spirit') g.spirit = c.i;
   else if (c.t === 'awaken') c.u.skillLv = Math.min(5, c.u.skillLv + 2);
-  else if (c.t === 'passive') { g.passives[c.k] = (g.passives[c.k] || 0) + 1; if (c.k === 'hp') { const add = Math.round(g.hero.st.hp * 0.2); g.player.maxHp += add; g.player.hp += add; } }
   else g.silver += g.chest ? 300 : 100;
   if (g.chest) { g.chest = false; g.mode = 'play'; setOverlay(''); if (g.pendingLevels > 0) openLevelUp(); return; }
   g.pendingLevels--;
@@ -435,15 +447,14 @@ export function pickChoice(i) {
 
 function openPeddler() {
   game.mode = 'peddler';
-  const items = [
-    { id: 'potion', name: '人蔘湯', desc: '回復 50% 血量', cost: 30 },
-    { id: 'whet', name: '磨刀石', desc: '全隊攻擊 +5%（本局）', cost: 120 },
-  ];
+  // 原作道具（名、說明、價錢來自 wiki）；回復量係遊戲設定
+  const HEAL = { 人蔘: 0.3, 人蔘酒: 0.2, 崔家藥丸: 0.6 };
+  const items = Object.values(GS.cons).map(it => ({ ...it, heal: HEAL[it.zh] || 0.3, cost: Math.max(10, Math.round(it.p / 5)) }));
   const render = () => {
     setOverlay(`<div class="panel"><h2>行商人</h2><p class="muted">本局銀兩：<b class="gold">${game.silver}</b></p><div class="cards">
-      ${items.map((it, i) => `<button class="card shop" data-i="${i}" ${game.silver < it.cost ? 'disabled' : ''}><div class="ct">${it.name}</div><div class="cs gold">${it.cost} 兩</div><div class="cd">${it.desc}</div></button>`).join('')}
+      ${items.map((it, i) => `<button class="card shop" data-i="${i}" ${game.silver < it.cost ? 'disabled' : ''}><div class="ct">${it.zh}</div><div class="cs gold">${it.cost} 兩</div><div class="cd">${it.desc}<br>回復 ${Math.round(it.heal * 100)}% 血量</div></button>`).join('')}
       </div><button class="btn" id="leave">告辭</button></div>`);
-    overlay.querySelectorAll('.card').forEach(b => b.onclick = () => { const it = items[+b.dataset.i]; if (game.silver < it.cost) return; game.silver -= it.cost; if (it.id === 'potion') healPlayer(game.player.maxHp * 0.5); else game.bonusDmg += 0.05; render(); });
+    overlay.querySelectorAll('.card').forEach(b => b.onclick = () => { const it = items[+b.dataset.i]; if (game.silver < it.cost) return; game.silver -= it.cost; healPlayer(game.player.maxHp * it.heal); render(); });
     document.getElementById('leave').onclick = () => { game.peddler = null; game.mode = 'play'; setOverlay(''); };
   };
   render();
@@ -499,6 +510,7 @@ function draw() {
     if (pr.kind === 'arrow' || pr.kind === 'needle') { ctx.strokeStyle = pr.kind === 'arrow' ? '#e0d0a0' : '#e0e8ff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x - Math.cos(a) * (pr.kind === 'arrow' ? 12 : 7), y - Math.sin(a) * (pr.kind === 'arrow' ? 12 : 7)); ctx.lineTo(x, y); ctx.stroke(); }
     else if (pr.kind === 'bullet') { ctx.fillStyle = '#303030'; ctx.fillRect(x - 4, y - 4, 8, 8); ctx.fillStyle = '#ffa040'; ctx.fillRect(x - 2, y - 2, 4, 4); }
     else if (pr.kind === 'orb') { ctx.fillStyle = '#b080ff'; ctx.fillRect(x - 6, y - 6, 12, 12); ctx.fillStyle = '#fff'; ctx.fillRect(x - 2, y - 2, 4, 4); }
+    else if (pr.kind === 'phoenix') { ctx.fillStyle = '#ff7020'; ctx.beginPath(); ctx.arc(x, y, 22, 0, 7); ctx.fill(); ctx.fillStyle = '#ffd060'; ctx.beginPath(); ctx.arc(x, y, 12, 0, 7); ctx.fill(); ctx.strokeStyle = '#ff9040'; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(x - Math.cos(a) * 60, y - Math.sin(a) * 60); ctx.lineTo(x, y); ctx.stroke(); }
     else if (pr.kind === 'beam') { ctx.strokeStyle = '#a0e0ff'; ctx.lineWidth = 8; ctx.beginPath(); ctx.moveTo(x - Math.cos(a) * 40, y - Math.sin(a) * 40); ctx.lineTo(x, y); ctx.stroke(); }
     else { ctx.fillStyle = '#e8c040'; ctx.fillRect(x - 4, y - 4, 8, 8); ctx.fillStyle = '#7a5a10'; ctx.fillRect(x - 1, y - 1, 3, 3); }
   }
@@ -519,6 +531,13 @@ function blit(img, x, y, face, scale = SCALE) {
   const w = img.width * scale, h = img.height * scale;
   ctx.save(); ctx.translate(x, y); if (face < 0) ctx.scale(-1, 1); ctx.drawImage(img, -w / 2, -h + 6, w, h); ctx.restore();
 }
+function drawLocal(rot, idl, moving, dir, face, x, y, scale = 0.8) {
+  const f = localFrame(rot, idl, moving, dir || 0, game ? game.t : attractT, face);
+  if (!f) return false;
+  const w = f.img.width * scale, h = f.img.height * scale;
+  ctx.save(); ctx.translate(x, y + 6); if (f.flip) ctx.scale(-1, 1); ctx.drawImage(f.img, -w / 2, -h, w, h); ctx.restore();
+  return true;
+}
 function shadow(x, y, r) { ctx.fillStyle = 'rgba(0,0,0,0.28)'; ctx.beginPath(); ctx.ellipse(x, y + 4, r, r * 0.4, 0, 0, 7); ctx.fill(); }
 function label(t, x, y, col, size = 12) { ctx.font = `bold ${size}px sans-serif`; ctx.textAlign = 'center'; ctx.fillStyle = '#000'; ctx.fillText(t, x + 1, y + 1); ctx.fillStyle = col; ctx.fillText(t, x, y); }
 function drawEnemy(e, sx, sy) {
@@ -527,7 +546,7 @@ function drawEnemy(e, sx, sy) {
   const img = monsterSprite(e.mon, Math.floor(e.anim * 2) % 2);
   shadow(x, y, e.r);
   if (e.elite) { ctx.fillStyle = `rgba(255,200,60,${0.25 + 0.1 * Math.sin(game.t * 6)})`; ctx.beginPath(); ctx.arc(x, y - e.r, e.r * 1.3, 0, 7); ctx.fill(); }
-  blit(img, x, y, e.face, e.boss ? SCALE * 1.8 : e.elite ? SCALE * 1.4 : SCALE);
+  if (!drawLocal(e.mon.rot, e.mon.idl, true, e.dir, e.face, x, y, e.boss ? 1.4 : e.elite ? 1.1 : 0.8)) blit(img, x, y, e.face, e.boss ? SCALE * 1.8 : e.elite ? SCALE * 1.4 : SCALE);
   if (e.flash > 0) { ctx.globalAlpha = 0.45; ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x, y - e.r, e.r, 0, 7); ctx.fill(); ctx.globalAlpha = 1; }
   if (e.boss || e.elite) label((e.elite ? '精英 ' : '') + e.mon.zh, x, y + 22, e.elite ? '#ffd84a' : '#ff8080', 13);
   else if (e.hp < e.maxHp) { ctx.fillStyle = '#300'; ctx.fillRect(x - 12, y + 8, 24, 3); ctx.fillStyle = '#e03030'; ctx.fillRect(x - 12, y + 8, 24 * e.hp / e.maxHp, 3); }
@@ -537,7 +556,7 @@ function drawUnit(u, x, y) {
   shadow(x, y, 10);
   if (u.ghost) ctx.globalAlpha = 0.55;
   if (u.m.legend) { ctx.fillStyle = `rgba(255,216,74,${0.25 + 0.15 * Math.sin(game.t * 5)})`; ctx.beginPath(); ctx.arc(x, y - 22, 28, 0, 7); ctx.fill(); }
-  blit(img, x, y - (u.atkFx > 0 ? 3 : 0), u.face);
+  if (!drawLocal(u.m.rot, u.m.idl, u.moving, u.dir, u.face, x, y - (u.atkFx > 0 ? 3 : 0))) blit(img, x, y - (u.atkFx > 0 ? 3 : 0), u.face);
   ctx.globalAlpha = 1;
   label(mercName(u.id), x, y + 18, u.m.legend ? '#ffb060' : '#e8e0c8', 11);
 }
@@ -545,7 +564,7 @@ function drawHero(x, y) {
   const p = game.player, u = game.hero, img = mercSprite(u.id, u.m, p.moving ? Math.floor(p.anim * 2) % 2 : 0);
   shadow(x, y, 11);
   if (p.inv > 0 && Math.floor(p.inv * 20) % 2) ctx.globalAlpha = 0.5;
-  blit(img, x, y, p.face); ctx.globalAlpha = 1;
+  if (!drawLocal(u.m.rot, u.m.idl, p.moving, p.dir, p.face, x, y)) blit(img, x, y, p.face); ctx.globalAlpha = 1;
   ctx.fillStyle = '#300'; ctx.fillRect(x - 20, y + 10, 40, 5); ctx.fillStyle = '#40d060'; ctx.fillRect(x - 20, y + 10, 40 * clamp(p.hp / p.maxHp, 0, 1), 5);
 }
 function drawFx(f, sx, sy) {
@@ -579,10 +598,9 @@ function drawHud() {
   // right side: synergy, formations, relics, deck
   ctx.textAlign = 'right'; ctx.font = 'bold 13px sans-serif'; let ry = 30;
   const hr = (t, col = '#fff') => { ctx.fillStyle = '#000'; ctx.fillText(t, W - 11, ry + 1); ctx.fillStyle = col; ctx.fillText(t, W - 12, ry); ry += 18; };
-  const syn = g.syn || {};
-  for (const k of ['bow', 'melee', 'magic']) if (syn[k]) { const [n, a, b] = SYN_TEXT[k]; hr(`${n} ${syn[k]}：${syn[k] >= 4 ? b : syn[k] >= 2 ? a : '（2 隊員啟動）'}`, syn[k] >= 2 ? '#ffd84a' : '#a89878'); }
-  for (const k in g.formations) hr(`${FORMATIONS[k].name} Lv${g.formations[k]}`, '#7ad0ff');
-  for (const k of g.relics) hr(RELICS[k].name, '#ffb060');
+  if (g.form) hr(`陣型 ${FORMS[g.form.i].n} Lv${g.form.lv}`, '#7ad0ff');
+  if (g.spirit != null) hr(`精靈 ${SPIRITS[g.spirit].zh}`, '#ffb060');
+  for (const c of activeCombos()) hr(`合擊技 ${c.n}`, '#ffd84a');
   if (g.deck.length) hr(`未招募：${g.deck.length} 名`, '#a0e0a0');
   ctx.textAlign = 'left';
   if (g.boss && !g.boss.dead) { const bw = Math.min(500, W - 40), bx = (W - bw) / 2; ctx.fillStyle = '#300'; ctx.fillRect(bx, 52, bw, 12); ctx.fillStyle = '#e03030'; ctx.fillRect(bx, 52, bw * g.boss.hp / g.boss.maxHp, 12); label(g.boss.mon.zh, W / 2, 80, '#fff', 13); }
@@ -594,7 +612,7 @@ function drawAttract() {
   attractT += 1 / 60;
   drawGround(ctx, Math.round(attractT * 20), 0, W, H, zoneTheme('朝鮮地圖'));
   ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, W, H);
-  ATTRACT.forEach((id, i) => { const m = M(id); if (!m) return; const img = mercSprite(id, m, Math.floor(attractT * 3 + i) % 2); blit(img, W / 2 + (i - (ATTRACT.length - 1) / 2) * 76, H - 40, 1); });
+  ATTRACT.forEach((id, i) => { const m = M(id); if (!m) return; const x = W / 2 + (i - (ATTRACT.length - 1) / 2) * 76; if (!drawLocal(m.rot, m.idl, false, 0, -1, x, H - 40, 0.7)) blit(mercSprite(id, m, Math.floor(attractT * 3 + i) % 2), x, H - 40, 1); });
 }
 
 let last = performance.now();
@@ -606,5 +624,6 @@ function frame(now) {
 }
 window.__gs = { get game() { return game; }, startRun, update, pickChoice, endRun, get save() { return save; } };
 loadLocalPack().then(n => { if (n) console.log(`本機素材包已載入：${n} 個 sprite`); });
+detectLocalArt().then(on => { if (on) console.log('本機原作素材模式：開'); });
 if (hasSave()) openCamp(); else openNewGame();
 requestAnimationFrame(frame);
