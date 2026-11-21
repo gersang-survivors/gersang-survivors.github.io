@@ -1,4 +1,5 @@
 // 營地：傭兵永久養成（練級、裝備、轉職、合成、訓練所、市場、倉庫）
+import { CITIES, ROUTES, routesFrom, otherEnd, GOODS, buyPrice, sellPrice2, carryCap, cargoWeight } from './rules.js';
 import { GS, M, mercName, itemName, HEROES, SLOTS, SLOT_NAME, combatStats, styleOf, STYLE_NAME, skillEffect, jobTargets, FUSION_RECIPES, itemPrice, sellPrice, canEquip, HIRABLE, hireCost, partySize, levelFromExp, expProgress, MAX_LV } from './rules.js';
 import { portrait } from './render.js';
 import { setOverlay, overlay, startRun, fmtTime, enterTownView } from './main.js';
@@ -8,7 +9,8 @@ const SAVE_KEY = 'gersang-survivors-save-v2';
 const EXP = GS.exp;
 const expAt = lv => EXP[Math.max(0, lv - 1)][1];
 
-export let save = load();
+export let save = migrate(load());
+function migrate(s) { if (s) { s.city ||= '漢陽'; s.visited ||= ['漢陽']; s.cargo ||= {}; s.day ||= 1; } return s; }
 function load() { try { return JSON.parse(localStorage.getItem(SAVE_KEY)) || null; } catch { return null; } }
 export function persist() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch {} }
 export const hasSave = () => !!save;
@@ -26,7 +28,7 @@ export function openNewGame() {
     <div class="cards">${HEROES.map(id => `<button class="card hero" data-id="${id}"><img class="pt" src="${portrait(id, M(id))}"><div class="ct">${mercName(id)}</div><div class="cd">${M(id).sex === 'F' || /明花/.test(mercName(id)) ? '轉職路線：大商人 → 砲手' : '轉職路線：獵人 → 神弓'}</div></button>`).join('')}</div>
     <p class="muted">WASD / 方向鍵移動 ・ 手機拖動畫面 ・ P 暫停<br>資料來源：巨商全能百科（非官方同人作品）</p></div>`);
   overlay.querySelectorAll('.card').forEach(b => b.onclick = () => {
-    save = { v: 2, nextUid: 1, roster: [], party: [], silver: 500, items: {}, cleared: 0, runs: 0 };
+    save = migrate({ v: 2, nextUid: 1, roster: [], party: [], silver: 500, items: {}, cleared: 0, runs: 0 });
     save.roster.push(refreshLv({ uid: 0, id: b.dataset.id, exp: 0, equip: {} }));
     const archer = newRec('guU02', M('guU02').lv); save.party.push(archer.uid);
     persist(); enterTownView();
@@ -40,14 +42,18 @@ export function applyRunResult(g, win) {
   gain(heroRec(), g.exp);
   for (const uid of save.party) { const r = save.roster.find(x => x.uid === uid); if (r) gain(r, g.fielded.includes(uid) ? g.exp : g.exp * 0.5); }
   let silver = g.silver;
-  if (win) silver += Math.round(200 * Math.pow(2.2, g.zoneIdx));
+  if (win) silver += Math.round(100 * Math.pow(2, g.zoneIdx));
   save.silver += silver;
+  // 貨物：贏咗按完好度送到目的地；輸咗退返出發地，再損失一半
+  const keep = win ? g.cargoHp : g.cargoHp * 0.5, lost = [];
+  for (const [id, c] of Object.entries(save.cargo)) { const n = Math.floor(c.n * keep); if (n < c.n) lost.push(`${GOODS[id]?.zh || id} ×${c.n - n}`); if (n > 0) c.n = n; else delete save.cargo[id]; }
+  let arrived = null;
+  if (win && g.dest) { save.city = g.dest; if (!save.visited.includes(g.dest)) save.visited.push(g.dest); arrived = g.dest; }
+  save.day++;
   for (const [i, n] of Object.entries(g.loot)) save.items[i] = (save.items[i] || 0) + n;
   for (const id of g.tamed) newRec(id, M(id).lv || 1);
-  let unlocked = null;
-  if (win && g.zoneIdx === save.cleared && save.cleared < GS.zones.length) { save.cleared++; unlocked = GS.zones[save.cleared]?.zh || '（全部平定）'; }
   save.runs++; persist();
-  return { silver, levelUps, unlocked };
+  return { silver, levelUps, unlocked: arrived ? `抵達 ${arrived}` : null, lost };
 }
 
 // ---------------- camp ----------------
@@ -66,7 +72,10 @@ function bind() {
   overlay.querySelectorAll('[data-act]').forEach(el => el.onclick = e => { e.stopPropagation(); ACT[el.dataset.act](el.dataset); });
 }
 const ACT = {
-  zone: d => { startRun(+d.z); },
+  route: d => { const r = ROUTES[+d.r]; startRun(r.zone, otherEnd(r, save.city)); },
+  gbuy: d => { const n = +d.n, cost = buyPrice(d.item) * n; if (save.silver < cost) return; const cap = carryCap(partyRecs()) - cargoWeight(save.cargo); if (GOODS[d.item].w * n > cap) return;
+    save.silver -= cost; const c = save.cargo[d.item] ||= { n: 0, cost: 0 }; c.cost = (c.cost * c.n + cost) / (c.n + n); c.n += n; persist(); openCamp(); },
+  gsell: d => { const c = save.cargo[d.item]; if (!c) return; const n = d.all ? c.n : 1; save.silver += sellPrice2(d.item, save.city, save.day) * n; c.n -= n; if (c.n <= 0) delete save.cargo[d.item]; persist(); openCamp(); },
   party: d => {
     const uid = +d.uid, i = save.party.indexOf(uid);
     if (i >= 0) save.party.splice(i, 1);
@@ -101,6 +110,7 @@ const ACT = {
   reset: () => { if (confirm('刪除存檔重新開始？')) { localStorage.removeItem(SAVE_KEY); save = null; openNewGame(); } },
 };
 let slotPick = null;
+const partyRecs = () => [heroRec(), ...save.party.map(u => save.roster.find(r => r.uid === u)).filter(Boolean)];
 const hasItems = items => items.every(([i, q]) => (save.items[i] || 0) >= q);
 const takeItems = items => { for (const [i, q] of items) { save.items[i] -= q; if (save.items[i] <= 0) delete save.items[i]; } };
 function fusionPicks(rc) {
@@ -116,18 +126,31 @@ function unitCard(r, extra = '') {
   return `<div class="unit ${m.legend ? 'legend' : ''}" data-act="sel" data-uid="${r.uid}"><img class="pt" src="${portrait(r.id, m)}"><div class="un">${esc(mercName(r.id))}</div><div class="ul">Lv ${r.lv}</div><div class="us">${STYLE_NAME[st.style].split('・')[0]}${st.style !== 'porter' ? ` ${Math.round(st.dmg)}` : ''}</div>${extra}</div>`;
 }
 
+// 朝鮮地圖（經緯度投影；輪廓係簡化示意）
+const COAST = [[124.3,40],[125,40.5],[126.5,41.5],[128,41.8],[129.5,42.4],[130.6,42.5],[129.8,41],[129.4,40.7],[128.6,40],[127.6,39.4],[127.6,39],[128.4,38.6],[128.6,38],[129.4,37],[129.5,36],[129.4,35.5],[129.1,35.1],[128.5,34.9],[127.6,34.7],[126.5,34.4],[126.3,34.8],[126.4,35.6],[126.7,36],[126.2,36.8],[126.7,37.2],[126.5,37.7],[125.7,37.7],[125.1,38],[124.8,38.5],[125.3,39.3],[124.7,39.7]];
+const PX = lon => (lon - 123.8) * 62, PY = lat => (42.8 - lat) * 74;
+function koreaMap() {
+  const cur = save.city, adj = new Set(routesFrom(cur).map(r => r.i));
+  const lines = ROUTES.map(r => { const A = CITIES[r.a], B = CITIES[r.b], on = adj.has(r.i);
+    return `<line x1="${PX(A.lon)}" y1="${PY(A.lat)}" x2="${PX(B.lon)}" y2="${PY(B.lat)}" stroke="${on ? '#ffd84a' : '#8a7a58'}" stroke-width="${on ? 3 : 1.5}" stroke-dasharray="${on ? '' : '4 4'}"/>`; }).join('');
+  const dots = Object.entries(CITIES).map(([n, c]) => { const v = save.visited.includes(n), here = n === cur;
+    return `<circle cx="${PX(c.lon)}" cy="${PY(c.lat)}" r="${here ? 7 : c.big ? 5 : 4}" fill="${here ? '#ff6040' : v ? '#ffd84a' : '#c8bca0'}" stroke="#1a120a" stroke-width="1.5"/><text x="${PX(c.lon) + 8}" y="${PY(c.lat) + 4}" font-size="12" fill="${here ? '#ff9070' : '#f2ead8'}" font-weight="${here ? 700 : 400}">${n}</text>`; }).join('');
+  return `<svg class="kmap" viewBox="0 0 450 700"><polygon points="${COAST.map(([lo, la]) => `${PX(lo)},${PY(la)}`).join(' ')}" fill="#4a6a3a" stroke="#2a3a20" stroke-width="2"/><ellipse cx="${PX(126.55)}" cy="${PY(33.38)}" rx="26" ry="12" fill="#4a6a3a" stroke="#2a3a20" stroke-width="2"/>${lines}${dots}</svg>`;
+}
 function tabGo() {
-  const h = heroRec(), size = partySize(h.lv);
-  const zones = GS.zones.map((z, i) => {
-    const open = i <= save.cleared, done = i < save.cleared;
-    return `<button class="zone ${done ? 'done' : ''}" ${open ? `data-act="zone" data-z="${i}"` : 'disabled'}><div class="ct">${i + 1}. ${esc(z.zh)} ${done ? '✓' : ''}</div><div class="cd">${open ? esc(z.reg.map(m => m.zh).join('、')) : '未開放'}</div><div class="cs">${open ? `首領：${esc(z.boss.map(m => m.zh).join('、'))}` : ''}</div></button>`;
-  }).join('');
+  const h = heroRec(), size = partySize(h.lv), cur = save.city;
+  const routes = routesFrom(cur).map(r => { const z = GS.zones[r.zone], to = otherEnd(r, cur);
+    return `<button class="zone" data-act="route" data-r="${r.i}"><div class="ct">${esc(cur)} → ${esc(to)}</div><div class="cs">經 ${esc(z.zh)}</div><div class="cd">${esc(z.reg.map(m => m.zh).join('、'))}</div><div class="cs">首領：${esc(z.boss.map(m => m.zh).join('、'))}</div></button>`; }).join('');
   const roster = save.roster.filter(r => r.uid !== 0).map(r => {
     const on = save.party.includes(r.uid);
     return `<div class="pick ${on ? 'on' : ''}" data-act="party" data-uid="${r.uid}"><img class="pt sm" src="${portrait(r.id, M(r.id))}"><span>${esc(mercName(r.id))}</span><span class="muted">Lv ${r.lv}</span></div>`;
   }).join('') || '<p class="muted">未有傭兵，去訓練所招募。</p>';
-  return `<h3>出戰名單（${save.party.length}/${size}）</h3><p class="muted">戰鬥開始時只帶名單第一位，其餘要喺戰鬥升級時「招募」先會上場。有上場嘅傭兵攞全數經驗，冇上場嘅攞一半。主角等級越高名單越長。</p><div class="picks">${roster}</div>
-    <h3>揀地圖</h3><div class="zones">${zones}</div>`;
+  const cap = carryCap(partyRecs()), wt = cargoWeight(save.cargo);
+  const cargo = Object.entries(save.cargo).map(([id, c]) => `${esc(GOODS[id]?.zh || id)} ×${c.n}`).join('、') || '（冇）';
+  return `<div class="gogrid"><div>${koreaMap()}<p class="muted small">城市位置按現實地理；商路經邊個野外係遊戲安排。</p></div><div>
+    <h3>由 ${esc(cur)} 出發</h3><div class="zones one">${routes}</div>
+    <h3>貨物（${wt}/${cap}）</h3><p>${cargo}</p><p class="muted small">載重 = 主角同出戰名單傭兵嘅載重相加（挑夫特別多）。戰鬥中主角每次受傷，貨物都會損壞；輸咗退返出發地，再損失一半貨物。</p>
+    <h3>出戰名單（${save.party.length}/${size}）</h3><p class="muted small">開局只帶第一位，其餘要喺戰鬥升級時招募上場。</p><div class="picks">${roster}</div></div></div>`;
 }
 
 function tabMercs() {
@@ -185,7 +208,14 @@ function tabMarket() {
   const equipShop = Object.entries(GS.items).filter(([, it]) => it.shop && it.eq && (it.eq.lv || 0) <= lv + 10).sort((a, b) => (a[1].eq.lv || 0) - (b[1].eq.lv || 0));
   const mats = [...new Set([...FUSION_RECIPES.filter(r => !r.locked).flatMap(r => r.items.map(x => x[0])), ...Object.values(GS.mercs).flatMap(m => m.from.flatMap(f => (f.items || []).map(x => x[0])))])].filter(i => GS.items[i]);
   const row = (i, it) => `<div class="mrow"><span>${esc(it.zh)}</span><span class="muted">${it.eq ? `${SLOT_NAME[it.eq.g] || ''} Lv${it.eq.lv || 1}${it.eq.mn != null ? ` 攻${it.eq.mn}-${it.eq.mx}` : ''}${it.eq.ac ? ` 防${it.eq.ac}` : ''}${it.eq.wt ? ` ${esc(it.eq.wt)}` : ''}` : esc(it.cat)}</span><span class="muted">有 ${save.items[i] || 0}</span><button class="chip ok" data-act="buy" data-item="${i}" ${save.silver < itemPrice(i) ? 'disabled' : ''}>${money(itemPrice(i))} 兩</button></div>`;
-  return `<h3>村莊武器店</h3><div class="mlist">${equipShop.map(([i, it]) => row(i, it)).join('') || '<p class="muted">冇貨</p>'}</div>
+  const city = save.city, cap = carryCap(partyRecs()), wt = cargoWeight(save.cargo);
+  const local = (GS.towns[city] || []).map(g => { const can = Math.max(0, Math.min(Math.floor(save.silver / g.p), Math.floor((cap - wt) / g.w)));
+    return `<div class="mrow"><span>${esc(g.zh)}</span><span class="muted">${esc(g.cat || '')} ・ 重 ${g.w}</span><span class="gold">${money(g.p)} 兩</span><span><button class="chip ok" data-act="gbuy" data-item="${g.id}" data-n="1" ${can < 1 ? 'disabled' : ''}>買 1</button><button class="chip ok" data-act="gbuy" data-item="${g.id}" data-n="${Math.max(1, can)}" ${can < 1 ? 'disabled' : ''}>買 ${can}</button></span></div>`; }).join('');
+  const mine = Object.entries(save.cargo).map(([id, c]) => { const sp = sellPrice2(id, city, save.day), diff = sp - c.cost;
+    return `<div class="mrow"><span>${esc(GOODS[id]?.zh || id)} ×${c.n}</span><span class="muted">買入 ${money(c.cost)}</span><span class="${diff >= 0 ? 'gold' : 'bad'}">賣 ${money(sp)}（${diff >= 0 ? '+' : ''}${money(diff)}）</span><span><button class="chip" data-act="gsell" data-item="${id}">賣 1</button><button class="chip" data-act="gsell" data-item="${id}" data-all="1">全賣</button></span></div>`; }).join('');
+  return `<h3>${esc(city)} 特產</h3><p class="muted small">原作城市特產同價錢。喺有賣嘅城市平啲，運去冇賣、越遠嘅城市越貴，價錢每日浮動。載重 ${wt}/${cap}</p><div class="mlist">${local}</div>
+    <h3>你嘅貨物</h3><div class="mlist">${mine || '<p class="muted">未有貨物</p>'}</div>
+    <h3>村莊武器店</h3><div class="mlist">${equipShop.map(([i, it]) => row(i, it)).join('') || '<p class="muted">冇貨</p>'}</div>
     <h3>轉職・合成材料</h3><div class="mlist">${mats.map(i => row(i, GS.items[i])).join('')}</div>`;
 }
 

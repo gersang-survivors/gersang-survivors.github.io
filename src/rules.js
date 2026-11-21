@@ -136,3 +136,43 @@ export function enemyStats(mon, isBoss, zone) {
   }
   return { hp, dmg: 4 + 2 * Math.pow(mon.atk, 0.6) * (isBoss ? 1.5 : 1), speed: isBoss ? 55 : 50 + (mon.hp % 7) * 6, r: isBoss ? 30 : 12 + Math.min(6, Math.log10(mon.hp + 1) * 1.5) };
 }
+
+// ---------------- 行商：城市、商路、價錢 ----------------
+// 城市位置：用現實經緯度（原作資料冇座標）。商路同野外配對：按野外喺現實嘅位置安排，屬遊戲設定。
+export const CITIES = {
+  漢陽: { lat: 37.57, lon: 126.98, big: true }, 開城: { lat: 37.97, lon: 126.55 }, 平壤: { lat: 39.03, lon: 125.75, big: true },
+  新義州: { lat: 40.10, lon: 124.40 }, 咸興: { lat: 39.92, lon: 127.54 }, 水原: { lat: 37.26, lon: 127.03 }, 春川: { lat: 37.88, lon: 127.73 },
+  江陵: { lat: 37.75, lon: 128.88 }, 清州: { lat: 36.64, lon: 127.49 }, 全州: { lat: 35.82, lon: 127.15, big: true }, 光州: { lat: 35.16, lon: 126.85 },
+  木浦: { lat: 34.81, lon: 126.39 }, 大邱: { lat: 35.87, lon: 128.60 }, 慶州: { lat: 35.86, lon: 129.22 }, 釜山: { lat: 35.18, lon: 129.08, big: true },
+  西歸浦: { lat: 33.25, lon: 126.56 },
+};
+const Z = n => GS.zones.findIndex(z => z.zh === n);
+export const ROUTES = [
+  ['漢陽', '水原', '朝鮮地圖'], ['漢陽', '開城', '朝鮮地圖'], ['水原', '清州', '朝鮮地圖'],
+  ['漢陽', '春川', '大觀嶺'], ['春川', '江陵', '大觀嶺'],
+  ['開城', '平壤', '黑色商團野營地'], ['清州', '全州', '武寧王陵'], ['全州', '光州', '月奇峰'],
+  ['清州', '大邱', '高手洞窟'], ['大邱', '慶州', '桂林庭園'], ['江陵', '慶州', '桂林庭園'], ['慶州', '釜山', '巨濟海底洞窟'], ['大邱', '釜山', '巨濟海底洞窟'],
+  ['平壤', '咸興', '介馬莊園'], ['平壤', '新義州', '黑色商團營地'], ['光州', '木浦', '千年湖'], ['木浦', '西歸浦', '漢拏山'],
+].map(([a, b, z], i) => ({ i, a, b, zone: Z(z) })).filter(r => r.zone >= 0);
+export const routesFrom = city => ROUTES.filter(r => r.a === city || r.b === city);
+export const otherEnd = (r, city) => (r.a === city ? r.b : r.a);
+// hop distance between cities (BFS)
+function hops(from, to) {
+  const seen = new Map([[from, 0]]), q = [from];
+  while (q.length) { const c = q.shift(); if (c === to) return seen.get(c); for (const r of routesFrom(c)) { const n = otherEnd(r, c); if (!seen.has(n)) { seen.set(n, seen.get(c) + 1); q.push(n); } } }
+  return 6;
+}
+export const GOODS = {};
+for (const [city, list] of Object.entries(GS.towns)) for (const g of list) (GOODS[g.id] ||= { ...g, cities: [] }).cities.push(city);
+// 買入價 = 原作價錢；賣出價：本地有賣嘅打八折，冇賣嘅按離產地遠近加價，每日浮動
+export function buyPrice(id) { return GOODS[id].p; }
+export function sellPrice2(id, city, day) {
+  const g = GOODS[id]; if (!g) return 0;
+  if (g.cities.includes(city)) return Math.round(g.p * 0.8);
+  const d = Math.min(...g.cities.map(c => hops(c, city)));
+  let h = 0; for (const ch of id + city + day) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  const swing = 0.85 + (h % 31) / 100;
+  return Math.round(g.p * (1.15 + 0.12 * d) * swing);
+}
+export function carryCap(recs) { return recs.reduce((s, r) => s + (M(r.id)?.lift || 0), 0); }
+export function cargoWeight(cargo) { return Object.entries(cargo || {}).reduce((s, [id, c]) => s + (GOODS[id]?.w || 1) * c.n, 0); }

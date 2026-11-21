@@ -99,7 +99,7 @@ function activeCombos() {
 const STYLE_GROUP = { arrow: 'bow', bullet: 'bow', melee: 'melee', sweep: 'melee', orb: 'magic', needle: 'magic' };
 
 export function enterTownView() {
-  setOverlay(''); town.heroId = save.roster.find(r => r.uid === 0).id;
+  setOverlay(''); town.heroId = save.roster.find(r => r.uid === 0).id; town.city = save.city;
   enterTown(save.party.map(uid => save.roster.find(r => r.uid === uid)?.id).filter(Boolean));
   townUI();
 }
@@ -116,7 +116,7 @@ cv.addEventListener('click', e => {
   if (n && town.near === n) openCamp(n.key);
 });
 
-export function startRun(zoneIdx) {
+export function startRun(zoneIdx, dest) {
   town.on = false;
   const zone = GS.zones[zoneIdx];
   const heroRec = save.roster.find(r => r.uid === 0);
@@ -126,7 +126,7 @@ export function startRun(zoneIdx) {
   const party = first ? [makeUnit(first, false)] : [];
   game = {
     mode: 'play', zoneIdx, zone, theme: zoneTheme(zone.zh), t: 0, level: 1, xp: 0, xpNext: 5, pendingLevels: 0, kills: 0,
-    silver: 0, exp: 0, loot: {}, tamed: [], porter: 0, deck: deck.filter(r => r !== first), fielded: first ? [first.uid] : [],
+    dest, cargoHp: 1, silver: 0, exp: 0, loot: {}, tamed: [], porter: 0, deck: deck.filter(r => r !== first), fielded: first ? [first.uid] : [],
     form: null, spirit: null, comboT: {}, chests: [], nextElite: 60, regenT: 0, mods: null,
     player: { x: 0, y: 0, hp: hero.st.hp, maxHp: hero.st.hp, speed: 150, inv: 0, face: 1, moving: false, anim: 0 },
     hero, mercs: party, temps: [], enemies: [], projs: [], gems: [], coins: [], fx: [], texts: [], fields: [],
@@ -324,7 +324,7 @@ export function update(dt) {
     const dx = p.x - e.x, dy = p.y - e.y, l = Math.hypot(dx, dy) || 1;
     const s = e.speed * (e.slow > 0 ? 0.4 : 1) * (1 - g.mods.slow) * dt; e.x += dx / l * s; e.y += dy / l * s; e.anim += dt * 2; e.face = dx < 0 ? -1 : 1; e.dir = dirIndex(dx, dy);
     if (l < e.r + 12 && p.inv <= 0) {
-      p.hp -= e.dmg * 100 / (100 + ac * 2) * g.mods.taken; p.inv = 0.45; g.fx.push({ kind: 'hurt', x: p.x, y: p.y, life: 0.2, max: 0.2 });
+      const hurt = e.dmg * 100 / (100 + ac * 2) * g.mods.taken; p.hp -= hurt; g.cargoHp = Math.max(0.3, g.cargoHp - hurt / p.maxHp * 0.15); p.inv = 0.45; g.fx.push({ kind: 'hurt', x: p.x, y: p.y, life: 0.2, max: 0.2 });
       if (p.hp <= 0) { endRun(false); return; }
     }
     if (l > 1400 && !e.boss) { const a = rand(0, Math.PI * 2), R = Math.hypot(W, H) / 2 + 40; e.x = p.x + Math.cos(a) * R; e.y = p.y + Math.sin(a) * R; }
@@ -500,9 +500,9 @@ export function endRun(win) {
     <p>經驗 <b>${Math.round(game.exp).toLocaleString()}</b> ・ 銀兩 <b class="gold">${res.silver.toLocaleString()} 兩</b>${win ? '（含平定獎勵）' : ''}</p>
     ${res.levelUps.length ? `<p>${res.levelUps.map(x => `${x.name} Lv ${x.from} → <b>${x.to}</b>`).join('<br>')}</p>` : ''}
     ${game.tamed.length ? `<p class="gold">收服：${game.tamed.map(mercName).join('、')}</p>` : ''}
-    ${res.unlocked ? `<p class="gold">新地圖開放：${res.unlocked}</p>` : ''}
+    ${res.unlocked ? `<p class="gold">${res.unlocked}</p>` : ''}${res.lost.length ? `<p class="bad">貨物損失：${res.lost.join('、')}</p>` : ''}
     <p class="muted">戰利品：${lootList}</p>
-    <button class="btn" id="tocamp">返漢陽</button></div>`);
+    <button class="btn" id="tocamp">入城</button></div>`);
   document.getElementById('tocamp').onclick = () => { game = null; enterTownView(); };
 }
 
@@ -619,7 +619,7 @@ function drawHud() {
   label(g.finalDone ? '討伐首領！' : fmtTime(remain), W / 2, 38, '#fff', 22);
   ctx.textAlign = 'left'; ctx.font = 'bold 14px sans-serif';
   const hl = (t, y, col = '#fff') => { ctx.fillStyle = '#000'; ctx.fillText(t, 13, y + 1); ctx.fillStyle = col; ctx.fillText(t, 12, y); };
-  hl(`${g.zone.zh}`, 30, '#ffd84a'); hl(`Lv ${g.level} ・ 擊殺 ${g.kills}`, 50); hl(`銀兩 ${g.silver}`, 70, '#ffd84a'); hl(`經驗 ${Math.round(g.exp).toLocaleString()}`, 90, '#a0e0ff');
+  hl(`${g.zone.zh}${g.dest ? ` → ${g.dest}` : ''}`, 30, '#ffd84a'); if (Object.keys(save.cargo).length) hl(`貨物完好 ${Math.round(g.cargoHp * 100)}%`, 110, g.cargoHp > 0.7 ? '#a0e0a0' : '#ff9070'); hl(`Lv ${g.level} ・ 擊殺 ${g.kills}`, 50); hl(`銀兩 ${g.silver}`, 70, '#ffd84a'); hl(`經驗 ${Math.round(g.exp).toLocaleString()}`, 90, '#a0e0ff');
   if (g.buffT > 0) hl('激勵中', 110, '#ffd84a');
   // right side: synergy, formations, relics, deck
   ctx.textAlign = 'right'; ctx.font = 'bold 13px sans-serif'; let ry = 30;

@@ -33,7 +33,7 @@ for k, v in sel.items():
         'hero': k.startswith('guC') or k.startswith('guB'), 'sex': v.get('sex'),
         'lv': st.get('lv') or 0, 'cost': st.get('cost') or 0, 'atk': st.get('atk') or [1, 2], 'hp': st.get('hp') or 50,
         'str': st.get('str') or 0, 'dex': st.get('dex') or 0, 'int': st.get('int') or 0, 'ac': st.get('ac') or 0,
-        'credit': st.get('credit'), 'wt': weapon_type(k), 'sk': skills_of(v), 'el': v.get('el'),
+        'credit': st.get('credit'), 'lift': st.get('lift') or 0, 'wt': weapon_type(k), 'sk': skills_of(v), 'el': v.get('el'),
         'legend': bool(v.get('legend')),
         'to': [{'id': t['id'], 'k': t['k'], 'lv': t.get('lv')} for t in v.get('to', [])],
         'from': [{'id': f['id'], 'k': f['k'], 'lv': f.get('lv'), 'items': f.get('items', [])} for f in v.get('from', [])],
@@ -109,7 +109,15 @@ cons = {}
 for k, it in IT.items():
     if it['zh'] in ('人蔘', '人蔘酒', '崔家藥丸') and it.get('cat') == '使用道具':
         cons[k] = {'zh': it['zh'], 'desc': it.get('desc', '').split('\n')[0], 'p': price(it)}
-data = {'mercs': mercs, 'foreign': foreign, 'zones': zone_list, 'items': items, 'groups': groups, 'exp': expt, 'forms': forms, 'spirits': spirits, 'combos': combos, 'cons': cons}
+def weight(it):
+    m = re.search(r'重量\s*([\d,]+)', it.get('desc', ''))
+    return int(m.group(1).replace(',', '')) if m else 1
+CITY_NAMES = ['漢陽', '開城', '平壤', '新義州', '咸興', '水原', '春川', '江陵', '清州', '全州', '光州', '木浦', '大邱', '慶州', '釜山', '西歸浦']
+towns = {}
+for t in S['towns']:
+    if t['nat'] == '朝鮮' and t['zh'] in CITY_NAMES:
+        towns[t['zh']] = [{'id': g, 'zh': IT[g]['zh'], 'p': max(1, price(IT[g])), 'w': weight(IT[g]), 'cat': IT[g].get('cat')} for g, q in t['goods'] if g in IT]
+data = {'towns': towns, 'mercs': mercs, 'foreign': foreign, 'zones': zone_list, 'items': items, 'groups': groups, 'exp': expt, 'forms': forms, 'spirits': spirits, 'combos': combos, 'cons': cons}
 open(out, 'w').write('// 由 tools/extract.py 從 gersang-wiki/data.json 生成，唔好手改\nexport default ' + json.dumps(data, ensure_ascii=False, separators=(',', ':')) + ';\n')
 print(len(mercs), 'mercs', len(foreign), 'foreign', len(zone_list), 'zones', len(items), 'items', 'wts', wts)
 for z in zone_list: print(z['zh'], round(z['med']), [m['zh'] for m in z['reg']], '| boss', [m['zh'] for m in z['boss']])
