@@ -192,6 +192,22 @@ export function mercLook(id, m) {
   return L;
 }
 
+// 1px dark outline + top-left highlight: makes small sprites read clearly on any ground
+function outline(src) {
+  const w = src.width, h = src.height, [c, g] = canvas(w + 2, h + 2);
+  const d = src.getContext('2d').getImageData(0, 0, w, h).data, out = g.createImageData(w + 2, h + 2), o = out.data;
+  const A = (x, y) => x >= 0 && y >= 0 && x < w && y < h && d[(y * w + x) * 4 + 3] > 0;
+  for (let y = -1; y <= h; y++) for (let x = -1; x <= w; x++) {
+    const i = ((y + 1) * (w + 2) + x + 1) * 4;
+    if (A(x, y)) {
+      const j = (y * w + x) * 4; let r = d[j], gg = d[j + 1], b = d[j + 2];
+      if (!A(x, y - 1) || !A(x - 1, y)) { r = Math.min(255, r + 28); gg = Math.min(255, gg + 28); b = Math.min(255, b + 28); }
+      else if (!A(x, y + 1) || !A(x + 1, y)) { r *= 0.78; gg *= 0.78; b *= 0.78; }
+      o[i] = r; o[i + 1] = gg; o[i + 2] = b; o[i + 3] = d[j + 3];
+    } else if (A(x - 1, y) || A(x + 1, y) || A(x, y - 1) || A(x, y + 1)) { o[i] = 18; o[i + 1] = 14; o[i + 2] = 12; o[i + 3] = 255; }
+  }
+  g.putImageData(out, 0, 0); return c;
+}
 export function sprite(key, build) {
   if (pack.has(key)) return pack.get(key);
   let s = cache.get(key); if (!s) { s = build(); cache.set(key, s); } return s;
@@ -199,13 +215,13 @@ export function sprite(key, build) {
 export function mercSprite(id, m, frame) {
   return sprite(`merc_${id}_${frame}`, () => {
     const L = mercLook(id, m);
-    if (L.creature) return creature(L.creature, frame, L.tint);
-    if (L.cart) return cart(L.cart, frame, L.elem);
-    return humanoid(L, frame);
+    if (L.creature) return outline(creature(L.creature, frame, L.tint));
+    if (L.cart) return outline(cart(L.cart, frame, L.elem));
+    return outline(humanoid(L, frame));
   });
 }
-export function monsterSprite(mon, frame) { return sprite(`mon_${mon.id}_${frame}`, () => creature(mon.zh, frame)); }
-export function peddlerSprite(frame) { return sprite(`peddler_${frame}`, () => humanoid({ robe: '#3a7a5a', hat: 'gat', weapon: 'none', cape: '#c0a060' }, frame)); }
+export function monsterSprite(mon, frame) { return sprite(`mon_${mon.id}_${frame}`, () => outline(creature(mon.zh, frame))); }
+export function peddlerSprite(frame) { return sprite(`peddler_${frame}`, () => outline(humanoid({ robe: '#3a7a5a', hat: 'gat', weapon: 'none', cape: '#c0a060' }, frame))); }
 export function portrait(id, m) {
   const key = `portrait_${id}`;
   let url = cache.get(key);

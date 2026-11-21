@@ -1,4 +1,4 @@
-import { GS, M, mercName, itemName, RUN_SECONDS, MID_BOSS_AT, combatStats, styleOf, skillEffect, SKILL_CD, enemyStats, TAMEABLE, levelFromExp, partySize } from './rules.js';
+import { GS, M, mercName, itemName, RUN_SECONDS, MID_BOSS_AT, combatStats, styleOf, skillEffect, SKILL_CD, enemyStats, TAMEABLE, levelFromExp, partySize, STYLE_NAME } from './rules.js';
 import { drawGround, zoneTheme, mercSprite, monsterSprite, peddlerSprite, loadLocalPack, SCALE } from './render.js';
 import { save, persist, openCamp, applyRunResult, hasSave, openNewGame } from './camp.js';
 
@@ -53,15 +53,43 @@ function makeUnit(rec, isHero) {
     skills: (m.sk || []).map(s => ({ ...s, fx: skillEffect(s), cd: rand(2, SKILL_CD[skillEffect(s)]) })) };
 }
 
+// ---------------- 陣法・寶物・兵種羈絆 ----------------
+const FORMATIONS = {
+  crane: { name: '鶴翼陣', desc: '全隊射程 +15%，陣形展開', max: 3 },
+  fish: { name: '魚鱗陣', desc: '主角受到傷害 -12%', max: 3 },
+  snake: { name: '長蛇陣', desc: '全隊攻擊速度 +10%', max: 3 },
+  bagua: { name: '八卦陣', desc: '主角周圍結界：減速兼持續傷害', max: 3 },
+  crescent: { name: '偃月陣', desc: '近戰傷害 +20%、擊退加強', max: 3 },
+};
+const RELICS = {
+  powder: { name: '火藥桶', desc: '投射物命中時爆炸（範圍傷害）' },
+  tortoise: { name: '玄武甲', desc: '最大血量 +30%，每秒回復 1%' },
+  eye: { name: '千里眼', desc: '射程 +25%，拾取範圍 +50%' },
+  thunder: { name: '雷符', desc: '每 7 秒天雷轟擊 5 個敵人' },
+  scale: { name: '龍鱗', desc: '15% 機率造成 2.5 倍爆擊' },
+  cat: { name: '招財貓', desc: '銀兩收入 +50%' },
+};
+const has = k => game.relics.includes(k);
+const fLv = k => game.formations[k] || 0;
+const STYLE_GROUP = { arrow: 'bow', bullet: 'bow', coin: null, melee: 'melee', sweep: 'melee', orb: 'magic', needle: 'magic', porter: null };
+function synergy() {
+  const c = { bow: 0, melee: 0, magic: 0 };
+  for (const u of game.mercs) { const k = STYLE_GROUP[u.st.style]; if (k) c[k]++; }
+  return c;
+}
+const SYN_TEXT = { bow: ['弓兵', '≥2 穿透 +1', '≥4 定時箭雨'], melee: ['近戰', '≥2 傷害 +20%', '≥4 命中回血'], magic: ['術士', '≥2 範圍 +40%', '≥4 技能冷卻 -25%'] };
+
 export function startRun(zoneIdx) {
   const zone = GS.zones[zoneIdx];
   const heroRec = save.roster.find(r => r.uid === 0);
   const hero = makeUnit(heroRec, true);
-  const party = save.party.map(uid => save.roster.find(r => r.uid === uid)).filter(Boolean).map(r => makeUnit(r, false));
-  const porter = party.filter(u => u.st.style === 'porter').length;
+  const deck = save.party.map(uid => save.roster.find(r => r.uid === uid)).filter(Boolean);
+  const first = deck.find(r => styleOf(r.id) !== 'porter') || deck[0];
+  const party = first ? [makeUnit(first, false)] : [];
   game = {
     mode: 'play', zoneIdx, zone, theme: zoneTheme(zone.zh), t: 0, level: 1, xp: 0, xpNext: 5, pendingLevels: 0, kills: 0,
-    silver: 0, exp: 0, loot: {}, tamed: [], porter,
+    silver: 0, exp: 0, loot: {}, tamed: [], porter: 0, deck: deck.filter(r => r !== first), fielded: first ? [first.uid] : [],
+    formations: {}, relics: [], chests: [], nextElite: 60, rainT: 6, thunderT: 7, auraT: 0, regenT: 0,
     player: { x: 0, y: 0, hp: hero.st.hp, maxHp: hero.st.hp, speed: 150, inv: 0, face: 1, moving: false, anim: 0 },
     hero, mercs: party, temps: [], enemies: [], projs: [], gems: [], coins: [], fx: [], texts: [], fields: [],
     passives: {}, rerolls: 1 + Math.floor(levelFromExp(heroRec.exp) / 30), choices: [], spawnAcc: 0, boss: null, midDone: false, finalDone: false,
@@ -75,9 +103,14 @@ export function startRun(zoneIdx) {
 function unitDmg(u) {
   let m = (1 + 0.2 * u.atkUp) * (1 + 0.1 * (game.passives.rally || 0) + game.bonusDmg) * (game.buffT > 0 ? 1.25 : 1);
   if (u.isHero) m *= 1 + 0.25 * (game.passives.coin || 0);
+  const grp = STYLE_GROUP[u.st.style], syn = game.syn || {};
+  if (grp === 'melee') { if (syn.melee >= 2) m *= 1.2; m *= 1 + 0.2 * fLv('crescent'); }
+  if (grp === 'magic' && syn.magic >= 2) m *= 1.15;
+  if (has('scale') && Math.random() < 0.15) m *= 2.5;
   return u.st.dmg * m;
 }
-const unitCd = u => u.st.cd / (1 + 0.15 * u.spdUp);
+const unitCd = u => u.st.cd / (1 + 0.15 * u.spdUp) / (1 + 0.1 * fLv('snake'));
+const unitRange = (u, r) => r * (1 + 0.15 * fLv('crane')) * (has('eye') ? 1.25 : 1);
 
 // ---------------- combat ----------------
 function hitEnemy(e, dmg, kx = 0, ky = 0, kb = 0) {
@@ -102,6 +135,7 @@ function killEnemy(e) {
   const tame = TAMEABLE[mon.zh];
   if (tame && !e.boss && !g.tamed.includes(tame) && Math.random() < 0.003) { g.tamed.push(tame); banner(`收服咗 ${mon.zh}！`); }
   g.fx.push({ kind: 'puff', x: e.x, y: e.y, life: 0.3, max: 0.3 });
+  if (e.elite || (e.boss && !e.final)) g.chests.push({ x: e.x, y: e.y });
   if (e.boss) { if (g.boss === e) g.boss = g.enemies.find(x => x.boss && !x.dead) || null; if (e.final) { g.won = true; endRun(true); } }
 }
 function spawnEnemy(mon, isBoss, final) {
@@ -120,9 +154,9 @@ function basicAttack(u, t) {
   u.face = dx < 0 ? -1 : 1; u.atkFx = 0.15;
   const P = (o) => game.projs.push(Object.assign({ x: u.x, y: u.y - 12, dmg, pierce: 1, hit: new Set() }, o));
   switch (u.st.style) {
-    case 'arrow': P({ vx: dx / l * 540, vy: dy / l * 540, life: 0.8, kind: 'arrow', pierce: 1 + Math.floor(u.rec.lv / 40) }); break;
+    case 'arrow': P({ vx: dx / l * 540, vy: dy / l * 540, life: 0.8, kind: 'arrow', pierce: 1 + Math.floor(u.rec.lv / 40) + ((game.syn || {}).bow >= 2 ? 1 : 0) }); break;
     case 'needle': for (const a of [-0.15, 0, 0.15]) { const c = Math.cos(a), s = Math.sin(a); P({ vx: (dx * c - dy * s) / l * 480, vy: (dx * s + dy * c) / l * 480, life: 0.6, kind: 'needle', dmg: dmg * 0.45 }); } break;
-    case 'orb': P({ vx: dx / l * 320, vy: dy / l * 320, life: 1.1, kind: 'orb', splash: 55 }); break;
+    case 'orb': P({ vx: dx / l * 320, vy: dy / l * 320, life: 1.1, kind: 'orb', splash: 55 * ((game.syn || {}).magic >= 2 ? 1.4 : 1) }); break;
     case 'bullet': P({ vx: dx / l * 800, vy: dy / l * 800, life: 0.6, kind: 'bullet', dmg: dmg * 1.6, pierce: 2 }); game.fx.push({ kind: 'flash', x: u.x + dx / l * 14, y: u.y - 12 + dy / l * 14, life: 0.08, max: 0.08 }); break;
     case 'coin': {
       const hit = new Set([t]); const n = 1 + Math.floor((game.passives.coin || 0) / 2);
@@ -167,11 +201,12 @@ function castSkill(u, sk) {
 function updateUnit(u, i, n, dt) {
   const p = game.player;
   u.cd -= dt; u.atkFx = Math.max(0, u.atkFx - dt);
-  for (const sk of u.skills) { sk.cd -= dt; if (sk.cd <= 0) { if (castSkill(u, sk)) sk.cd = SKILL_CD[sk.fx] * (1 - 0.1 * u.skillLv); else sk.cd = 1; } }
+  for (const sk of u.skills) { sk.cd -= dt; if (sk.cd <= 0) { if (castSkill(u, sk)) sk.cd = SKILL_CD[sk.fx] * Math.max(0.4, 1 - 0.1 * u.skillLv) * ((game.syn || {}).magic >= 4 ? 0.75 : 1); else sk.cd = 1; } }
   if (u.isHero) { u.x = p.x; u.y = p.y; u.face = p.face; u.anim = p.anim;
-    if (u.cd <= 0) { const t = nearestEnemy(p.x, p.y, u.st.range || 280); if (t) { u.cd = unitCd(u); basicAttack(u, t); } } return; }
+    if (u.cd <= 0) { const t = nearestEnemy(p.x, p.y, unitRange(u, u.st.range || 280)); if (t) { u.cd = unitCd(u); basicAttack(u, t); } } return; }
   const ang = (i / Math.max(1, n)) * Math.PI * 2 + game.t * 0.2;
-  let tx = p.x + Math.cos(ang) * 64, ty = p.y + Math.sin(ang) * 48, spd = Math.max(220, p.speed * 1.4);
+  const spread = 1 + 0.25 * fLv('crane');
+  let tx = p.x + Math.cos(ang) * 64 * spread, ty = p.y + Math.sin(ang) * 48 * spread, spd = Math.max(220, p.speed * 1.4);
   const style = u.st.style;
   if (style === 'melee' || style === 'sweep') {
     const t = nearestEnemy(p.x, p.y, 190);
@@ -183,12 +218,13 @@ function updateUnit(u, i, n, dt) {
         if (u.cd <= 0) {
           u.cd = unitCd(u); u.atkFx = 0.15; u.face = near.x < u.x ? -1 : 1;
           if (style === 'sweep') { game.fx.push({ kind: 'ring', x: u.x, y: u.y, r: 58, life: 0.2, max: 0.2 }); for (const e of game.enemies) if (!e.dead && dist2(e, u) < (58 + e.r) ** 2) hitEnemy(e, unitDmg(u) * 0.8, e.x - u.x, e.y - u.y, 16); }
-          else { game.fx.push({ kind: 'slash', x: near.x, y: near.y, life: 0.12, max: 0.12, f: u.face }); hitEnemy(near, unitDmg(u), near.x - u.x, near.y - u.y, 5); }
+          else { game.fx.push({ kind: 'slash', x: near.x, y: near.y, life: 0.12, max: 0.12, f: u.face }); hitEnemy(near, unitDmg(u), near.x - u.x, near.y - u.y, 5 + 8 * fLv('crescent')); }
+          if ((game.syn || {}).melee >= 4) { const pl = game.player; pl.hp = Math.min(pl.maxHp, pl.hp + pl.maxHp * 0.004); }
         }
       }
     }
   } else if (style !== 'porter' && u.cd <= 0) {
-    const t = nearestEnemy(u.x, u.y, u.st.range || 260); if (t) { u.cd = unitCd(u); basicAttack(u, t); }
+    const t = nearestEnemy(u.x, u.y, unitRange(u, u.st.range || 260)); if (t) { u.cd = unitCd(u); basicAttack(u, t); }
   }
   const dx = tx - u.x, dy = ty - u.y, l = Math.hypot(dx, dy);
   if (l > 4) { const s = Math.min(l, spd * dt * (l > 320 ? 3 : 1)); u.x += dx / l * s; u.y += dy / l * s; u.anim += dt * 2; if (Math.abs(dx) > 2) u.face = dx < 0 ? -1 : 1; }
@@ -237,6 +273,8 @@ export function update(dt) {
   if (!g.peddler && g.t >= g.nextPeddler) { const a = rand(0, Math.PI * 2); g.peddler = { x: p.x + Math.cos(a) * 320, y: p.y + Math.sin(a) * 320, life: 40, anim: 0 }; g.nextPeddler += 150; banner('行商人嚟咗！'); }
   if (g.peddler) { g.peddler.life -= dt; g.peddler.anim += dt; if (g.peddler.life <= 0) g.peddler = null; else if (dist2(g.peddler, p) < 34 * 34) openPeddler(); }
 
+  g.syn = synergy();
+  periodic(dt);
   updateUnit(g.hero, 0, 1, dt);
   const all = g.mercs.concat(g.temps);
   all.forEach((u, i) => updateUnit(u, i, all.length, dt));
@@ -250,7 +288,7 @@ export function update(dt) {
     const dx = p.x - e.x, dy = p.y - e.y, l = Math.hypot(dx, dy) || 1;
     const s = e.speed * (e.slow > 0 ? 0.4 : 1) * dt; e.x += dx / l * s; e.y += dy / l * s; e.anim += dt * 2; e.face = dx < 0 ? -1 : 1;
     if (l < e.r + 12 && p.inv <= 0) {
-      p.hp -= e.dmg * 100 / (100 + ac * 2); p.inv = 0.45; g.fx.push({ kind: 'hurt', x: p.x, y: p.y, life: 0.2, max: 0.2 });
+      p.hp -= e.dmg * 100 / (100 + ac * 2) * (1 - 0.12 * fLv('fish')); p.inv = 0.45; g.fx.push({ kind: 'hurt', x: p.x, y: p.y, life: 0.2, max: 0.2 });
       if (p.hp <= 0) { endRun(false); return; }
     }
     if (l > 1400 && !e.boss) { const a = rand(0, Math.PI * 2), R = Math.hypot(W, H) / 2 + 40; e.x = p.x + Math.cos(a) * R; e.y = p.y + Math.sin(a) * R; }
@@ -268,6 +306,7 @@ export function update(dt) {
         pr.hit.add(e);
         if (pr.splash) { g.fx.push({ kind: 'ring', x: pr.x, y: pr.y, r: pr.splash, life: 0.25, max: 0.25, col: '#b080ff' }); for (const o of g.enemies) if (!o.dead && dist2(o, pr) < pr.splash ** 2) hitEnemy(o, pr.dmg); }
         else hitEnemy(e, pr.dmg, pr.vx, pr.vy, pr.kind === 'bullet' ? 12 : 3);
+        if (has('powder') && pr.kind !== 'beam') { g.fx.push({ kind: 'ring', x: pr.x, y: pr.y, r: 40, life: 0.2, max: 0.2, col: '#ff9040' }); for (const o of g.enemies) if (!o.dead && o !== e && dist2(o, pr) < 40 * 40) hitEnemy(o, pr.dmg * 0.4); }
         if (--pr.pierce <= 0) { pr.life = 0; break; }
       }
     }
@@ -275,11 +314,11 @@ export function update(dt) {
   g.projs = g.projs.filter(pr => pr.life > 0);
   g.enemies = g.enemies.filter(e => !e.dead);
 
-  const magnet = 70 * (1 + 0.35 * (g.passives.magnet || 0)) * (1 + 0.3 * g.porter);
+  const magnet = 70 * (1 + 0.35 * (g.passives.magnet || 0)) * (1 + 0.3 * g.porter) * (has('eye') ? 1.5 : 1);
   for (const list of [g.gems, g.coins]) for (const o of list) {
     const d2 = dist2(o, p);
     if (d2 < magnet * magnet || o.pull) { o.pull = true; const dx = p.x - o.x, dy = p.y - o.y, l = Math.hypot(dx, dy) || 1; o.x += dx / l * 520 * dt; o.y += dy / l * 520 * dt; }
-    if (d2 < 16 * 16) { o.got = true; if (list === g.gems) gainXp(o.v); else g.silver += o.v; }
+    if (d2 < 16 * 16) { o.got = true; if (list === g.gems) gainXp(o.v); else g.silver += Math.round(o.v * (has('cat') ? 1.5 : 1)); }
   }
   g.gems = g.gems.filter(o => !o.got); g.coins = g.coins.filter(o => !o.got);
   if (g.gems.length > 500) { const extra = g.gems.splice(0, g.gems.length - 400); g.gems.push({ x: extra[0].x, y: extra[0].y, v: extra.reduce((s, x) => s + x.v, 0), big: true }); }
@@ -287,6 +326,40 @@ export function update(dt) {
   for (const f of g.fx) f.life -= dt; g.fx = g.fx.filter(f => f.life > 0);
   for (const t of g.texts) { t.life -= dt; t.y -= 30 * dt; } g.texts = g.texts.filter(t => t.life > 0);
   if (g.pendingLevels > 0 && g.mode === 'play') openLevelUp();
+}
+function periodic(dt) {
+  const g = game, p = g.player;
+  // elites every 75s
+  if (!g.finalDone && g.t >= g.nextElite) {
+    g.nextElite += 75;
+    const reg = g.zone.reg, mon = reg[Math.min(reg.length - 1, Math.floor(Math.min(1, g.t / RUN_SECONDS) * reg.length))];
+    const e = spawnEnemy(mon, false, false); e.elite = true; e.hp *= 12; e.maxHp *= 12; e.r *= 1.4; e.dmg *= 1.5;
+    banner(`精英 ${mon.zh} 出現！打低有寶箱`);
+  }
+  for (const c of g.chests) if (!c.got && dist2(c, p) < 30 * 30) { c.got = true; openChest(); }
+  g.chests = g.chests.filter(c => !c.got);
+  if (g.syn.bow >= 4 && (g.rainT -= dt) <= 0) {
+    g.rainT = 6; const t = nearestEnemy(p.x + rand(-150, 150), p.y + rand(-150, 150), 300);
+    if (t) { const bows = g.mercs.filter(u => STYLE_GROUP[u.st.style] === 'bow'); const dmg = bows.reduce((s, u) => s + unitDmg(u), 0) / bows.length * 3;
+      g.fx.push({ kind: 'ring', x: t.x, y: t.y, r: 100, life: 0.4, max: 0.4, col: '#e0d0a0' }); g.texts.push({ x: t.x, y: t.y - 40, v: '箭雨', life: 0.8, skill: true });
+      for (const e of g.enemies) if (!e.dead && dist2(e, t) < 100 * 100) hitEnemy(e, dmg); }
+  }
+  if (has('thunder') && (g.thunderT -= dt) <= 0) {
+    g.thunderT = 7; const hit = new Set();
+    for (let i = 0; i < 5; i++) { const e = nearestEnemy(p.x + rand(-250, 250), p.y + rand(-250, 250), 300, hit); if (!e) break; hit.add(e); g.fx.push({ kind: 'strike', x: e.x, y: e.y, life: 0.25, max: 0.25 }); hitEnemy(e, unitDmg(g.hero) * 3); }
+  }
+  if (fLv('bagua')) {
+    const r = 100 + 20 * fLv('bagua'); g.auraR = r;
+    for (const e of g.enemies) if (!e.dead && dist2(e, p) < r * r) e.slow = 0.2;
+    if ((g.auraT -= dt) <= 0) { g.auraT = 0.5; for (const e of g.enemies) if (!e.dead && dist2(e, p) < r * r) hitEnemy(e, unitDmg(g.hero) * 0.25 * fLv('bagua')); }
+  }
+  if (has('tortoise') && (g.regenT -= dt) <= 0) { g.regenT = 1; p.hp = Math.min(p.maxHp, p.hp + p.maxHp * 0.01); }
+}
+function recruit(rec) {
+  const g = game, u = makeUnit(rec, false); u.x = g.player.x + rand(-40, 40); u.y = g.player.y + rand(-40, 40);
+  g.mercs.push(u); g.deck = g.deck.filter(r => r !== rec); g.fielded.push(rec.uid);
+  g.porter = g.mercs.filter(m => m.st.style === 'porter').length;
+  g.fx.push({ kind: 'ring', x: u.x, y: u.y, r: 50, life: 0.6, max: 0.6, col: '#ffd84a' }); banner(`${mercName(rec.id)} 加入戰鬥！`);
 }
 function gainXp(v) { const g = game; g.xp += v; while (g.xp >= g.xpNext) { g.xp -= g.xpNext; g.level++; g.pendingLevels++; g.xpNext = Math.floor(5 + g.level * 3 + Math.pow(g.level, 1.35)); } }
 
@@ -298,8 +371,30 @@ const PASSIVES = {
   coin: { name: '主角修練', desc: '主角傷害 +25%', max: 5 },
   rally: { name: '軍令', desc: '全隊傷害 +10%', max: 5 },
 };
+function recruitCard(rec) {
+  const m = M(rec.id), st = combatStats(rec);
+  return { t: 'recruit', rec, title: `招募 ${mercName(rec.id)}`, sub: `Lv ${rec.lv} ・ ${STYLE_NAME[st.style].split('・')[0]}`, desc: (m.sk || []).map(s => s.n.replace(/\(.*\)/, '')).join('・') || STYLE_NAME[st.style], tag: 'recruit', rec_id: rec.id };
+}
+function rareChoices() {
+  const g = game, c = [];
+  for (const rec of g.deck) c.push([recruitCard(rec), 4]);
+  for (const k in RELICS) if (!has(k) && g.relics.length < 5) c.push([{ t: 'relic', k, title: RELICS[k].name, sub: '寶物', desc: RELICS[k].desc, tag: 'fuse' }, 3]);
+  for (const u of [g.hero, ...g.mercs]) if (u.skills.length && u.skillLv < 5) c.push([{ t: 'awaken', u, title: `${mercName(u.id)} 技能覺醒`, sub: u.skills.map(s => s.n.replace(/\(.*\)/, '')).join('・'), desc: '技能等級 +2', tag: 'job' }, 2]);
+  return c;
+}
+function openChest() {
+  const g = game; g.mode = 'levelup'; g.chest = true;
+  const c = rareChoices(), out = []; let guard = 0;
+  while (out.length < 3 && c.length && guard++ < 60) { const x = pickWeighted(c); if (!out.includes(x)) out.push(x); }
+  if (!out.length) out.push({ t: 'silver', title: '銀兩 +300', sub: '', desc: '寶箱入面得銀兩' });
+  g.choices = out; renderLevelUp();
+}
 function buildChoices() {
   const g = game, c = [];
+  for (const rec of g.deck) c.push([recruitCard(rec), g.mercs.length < 3 ? 7 : 4]);
+  const nF = Object.keys(g.formations).length;
+  for (const k in FORMATIONS) if ((g.formations[k] || 0) < FORMATIONS[k].max && (g.formations[k] || nF < 2)) c.push([{ t: 'form', k, title: FORMATIONS[k].name, sub: `陣法 Lv ${fLv(k)} → ${fLv(k) + 1}`, desc: FORMATIONS[k].desc + (nF >= 1 && !g.formations[k] ? '（最多 2 個陣法）' : ''), tag: 'job' }, 2]);
+  for (const k in RELICS) if (!has(k) && g.relics.length < 5) c.push([{ t: 'relic', k, title: RELICS[k].name, sub: '寶物', desc: RELICS[k].desc, tag: 'fuse' }, 0.7]);
   for (const u of [g.hero, ...g.mercs]) {
     if (u.st.style === 'porter') continue;
     const nm = mercName(u.id);
@@ -309,14 +404,16 @@ function buildChoices() {
   }
   for (const k in PASSIVES) if ((g.passives[k] || 0) < PASSIVES[k].max) c.push([{ t: 'passive', k, title: PASSIVES[k].name, sub: `Lv ${g.passives[k] || 0} → ${(g.passives[k] || 0) + 1}`, desc: PASSIVES[k].desc }, 2]);
   const out = []; let guard = 0;
+  const rc = c.filter(([x]) => x.t === 'recruit');
+  if (rc.length && Math.random() < 0.6) out.push(pickWeighted(rc));
   while (out.length < 3 && c.length && guard++ < 60) { const x = pickWeighted(c); if (!out.includes(x)) out.push(x); }
   if (!out.length) out.push({ t: 'silver', title: '銀兩 +100', sub: '', desc: '全部滿晒' });
   return out;
 }
-function openLevelUp() { game.mode = 'levelup'; game.choices = buildChoices(); renderLevelUp(); }
+function openLevelUp() { game.mode = 'levelup'; game.chest = false; game.choices = buildChoices(); renderLevelUp(); }
 function renderLevelUp() {
-  setOverlay(`<div class="panel"><h2>升級！</h2><div class="cards">${game.choices.map((v, i) => `<button class="card ${v.tag || ''}" data-i="${i}"><div class="key">${i + 1}</div><div class="ct">${v.title}</div><div class="cs">${v.sub}</div><div class="cd">${v.desc}</div></button>`).join('')}</div>
-    ${game.rerolls > 0 ? `<button class="btn small" id="reroll">重抽（剩 ${game.rerolls}）</button>` : ''}</div>`);
+  setOverlay(`<div class="panel"><h2>${game.chest ? '寶箱！' : '升級！'}</h2><div class="cards">${game.choices.map((v, i) => `<button class="card ${v.tag || ''}" data-i="${i}"><div class="key">${i + 1}</div><div class="ct">${v.title}</div><div class="cs">${v.sub}</div><div class="cd">${v.desc}</div></button>`).join('')}</div>
+    ${game.rerolls > 0 && !game.chest ? `<button class="btn small" id="reroll">重抽（剩 ${game.rerolls}）</button>` : ''}</div>`);
   overlay.querySelectorAll('.card').forEach(b => b.onclick = () => pickChoice(+b.dataset.i));
   const rr = document.getElementById('reroll'); if (rr) rr.onclick = () => { game.rerolls--; game.choices = buildChoices(); renderLevelUp(); };
 }
@@ -325,8 +422,13 @@ export function pickChoice(i) {
   if (c.t === 'atk') c.u.atkUp++;
   else if (c.t === 'spd') c.u.spdUp++;
   else if (c.t === 'skill') c.u.skillLv++;
+  else if (c.t === 'recruit') recruit(c.rec);
+  else if (c.t === 'form') g.formations[c.k] = fLv(c.k) + 1;
+  else if (c.t === 'relic') { g.relics.push(c.k); if (c.k === 'tortoise') { const add = Math.round(g.player.maxHp * 0.3); g.player.maxHp += add; g.player.hp += add; } }
+  else if (c.t === 'awaken') c.u.skillLv = Math.min(5, c.u.skillLv + 2);
   else if (c.t === 'passive') { g.passives[c.k] = (g.passives[c.k] || 0) + 1; if (c.k === 'hp') { const add = Math.round(g.hero.st.hp * 0.2); g.player.maxHp += add; g.player.hp += add; } }
-  else g.silver += 100;
+  else g.silver += g.chest ? 300 : 100;
+  if (g.chest) { g.chest = false; g.mode = 'play'; setOverlay(''); if (g.pendingLevels > 0) openLevelUp(); return; }
   g.pendingLevels--;
   if (g.pendingLevels > 0) { g.choices = buildChoices(); renderLevelUp(); } else { g.mode = 'play'; setOverlay(''); }
 }
@@ -381,6 +483,8 @@ function draw() {
   const sx = x => Math.round(x - camX), sy = y => Math.round(y - camY);
   for (const f of g.fields) { ctx.fillStyle = 'rgba(240,220,90,0.18)'; ctx.strokeStyle = 'rgba(240,220,90,0.7)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(sx(f.x), sy(f.y), f.r, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
   for (const gm of g.gems) { const s = gm.big ? 8 : 6; ctx.fillStyle = gm.big ? '#60e0ff' : '#40a0ff'; ctx.fillRect(sx(gm.x) - s / 2, sy(gm.y) - s / 2, s, s); }
+  if (g.auraR) { ctx.strokeStyle = 'rgba(160,200,255,0.5)'; ctx.lineWidth = 2; ctx.setLineDash([6, 6]); ctx.beginPath(); ctx.arc(sx(p.x), sy(p.y) - 6, g.auraR, 0, 7); ctx.stroke(); ctx.setLineDash([]); }
+  for (const c of g.chests) { const x = sx(c.x), y = sy(c.y) + Math.sin(g.t * 4) * 2; ctx.fillStyle = '#7a4a1a'; ctx.fillRect(x - 12, y - 12, 24, 16); ctx.fillStyle = '#d0a020'; ctx.fillRect(x - 12, y - 7, 24, 3); ctx.fillRect(x - 2, y - 10, 4, 6); }
   for (const c of g.coins) { ctx.fillStyle = '#e8c040'; ctx.fillRect(sx(c.x) - 5, sy(c.y) - 5, 10, 10); ctx.fillStyle = '#7a5a10'; ctx.fillRect(sx(c.x) - 2, sy(c.y) - 2, 4, 4); }
 
   const ents = [];
@@ -422,9 +526,10 @@ function drawEnemy(e, sx, sy) {
   if (x < -100 || y < -120 || x > W + 100 || y > H + 120) return;
   const img = monsterSprite(e.mon, Math.floor(e.anim * 2) % 2);
   shadow(x, y, e.r);
-  blit(img, x, y, e.face, e.boss ? SCALE * 1.8 : SCALE);
+  if (e.elite) { ctx.fillStyle = `rgba(255,200,60,${0.25 + 0.1 * Math.sin(game.t * 6)})`; ctx.beginPath(); ctx.arc(x, y - e.r, e.r * 1.3, 0, 7); ctx.fill(); }
+  blit(img, x, y, e.face, e.boss ? SCALE * 1.8 : e.elite ? SCALE * 1.4 : SCALE);
   if (e.flash > 0) { ctx.globalAlpha = 0.45; ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x, y - e.r, e.r, 0, 7); ctx.fill(); ctx.globalAlpha = 1; }
-  if (e.boss) label(e.mon.zh, x, y + 22, '#ff8080', 13);
+  if (e.boss || e.elite) label((e.elite ? '精英 ' : '') + e.mon.zh, x, y + 22, e.elite ? '#ffd84a' : '#ff8080', 13);
   else if (e.hp < e.maxHp) { ctx.fillStyle = '#300'; ctx.fillRect(x - 12, y + 8, 24, 3); ctx.fillStyle = '#e03030'; ctx.fillRect(x - 12, y + 8, 24 * e.hp / e.maxHp, 3); }
 }
 function drawUnit(u, x, y) {
@@ -471,6 +576,15 @@ function drawHud() {
   const hl = (t, y, col = '#fff') => { ctx.fillStyle = '#000'; ctx.fillText(t, 13, y + 1); ctx.fillStyle = col; ctx.fillText(t, 12, y); };
   hl(`${g.zone.zh}`, 30, '#ffd84a'); hl(`Lv ${g.level} ・ 擊殺 ${g.kills}`, 50); hl(`銀兩 ${g.silver}`, 70, '#ffd84a'); hl(`經驗 ${Math.round(g.exp).toLocaleString()}`, 90, '#a0e0ff');
   if (g.buffT > 0) hl('激勵中', 110, '#ffd84a');
+  // right side: synergy, formations, relics, deck
+  ctx.textAlign = 'right'; ctx.font = 'bold 13px sans-serif'; let ry = 30;
+  const hr = (t, col = '#fff') => { ctx.fillStyle = '#000'; ctx.fillText(t, W - 11, ry + 1); ctx.fillStyle = col; ctx.fillText(t, W - 12, ry); ry += 18; };
+  const syn = g.syn || {};
+  for (const k of ['bow', 'melee', 'magic']) if (syn[k]) { const [n, a, b] = SYN_TEXT[k]; hr(`${n} ${syn[k]}：${syn[k] >= 4 ? b : syn[k] >= 2 ? a : '（2 隊員啟動）'}`, syn[k] >= 2 ? '#ffd84a' : '#a89878'); }
+  for (const k in g.formations) hr(`${FORMATIONS[k].name} Lv${g.formations[k]}`, '#7ad0ff');
+  for (const k of g.relics) hr(RELICS[k].name, '#ffb060');
+  if (g.deck.length) hr(`未招募：${g.deck.length} 名`, '#a0e0a0');
+  ctx.textAlign = 'left';
   if (g.boss && !g.boss.dead) { const bw = Math.min(500, W - 40), bx = (W - bw) / 2; ctx.fillStyle = '#300'; ctx.fillRect(bx, 52, bw, 12); ctx.fillStyle = '#e03030'; ctx.fillRect(bx, 52, bw * g.boss.hp / g.boss.maxHp, 12); label(g.boss.mon.zh, W / 2, 80, '#fff', 13); }
   if (bannerT > 0) { ctx.globalAlpha = clamp(bannerT, 0, 1); label(bannerText, W / 2, H * 0.3, '#ffd84a', 26); ctx.globalAlpha = 1; }
 }

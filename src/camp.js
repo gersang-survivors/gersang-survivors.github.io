@@ -37,7 +37,7 @@ export function applyRunResult(g, win) {
   const levelUps = [];
   const gain = (rec, exp) => { const from = rec.lv; rec.exp += exp; refreshLv(rec); if (rec.lv > from) levelUps.push({ name: mercName(rec.id), from, to: rec.lv }); };
   gain(heroRec(), g.exp);
-  for (const uid of save.party) { const r = save.roster.find(x => x.uid === uid); if (r) gain(r, g.exp); }
+  for (const uid of save.party) { const r = save.roster.find(x => x.uid === uid); if (r) gain(r, g.fielded.includes(uid) ? g.exp : g.exp * 0.5); }
   let silver = g.silver;
   if (win) silver += Math.round(200 * Math.pow(2.2, g.zoneIdx));
   save.silver += silver;
@@ -124,7 +124,7 @@ function tabGo() {
     const on = save.party.includes(r.uid);
     return `<div class="pick ${on ? 'on' : ''}" data-act="party" data-uid="${r.uid}"><img class="pt sm" src="${portrait(r.id, M(r.id))}"><span>${esc(mercName(r.id))}</span><span class="muted">Lv ${r.lv}</span></div>`;
   }).join('') || '<p class="muted">未有傭兵，去訓練所招募。</p>';
-  return `<h3>出戰隊伍（${save.party.length}/${size}）</h3><p class="muted">主角等級越高可以帶越多傭兵。撳傭兵加入或者移出。</p><div class="picks">${roster}</div>
+  return `<h3>出戰名單（${save.party.length}/${size}）</h3><p class="muted">戰鬥開始時只帶名單第一位，其餘要喺戰鬥升級時「招募」先會上場。有上場嘅傭兵攞全數經驗，冇上場嘅攞一半。主角等級越高名單越長。</p><div class="picks">${roster}</div>
     <h3>揀地圖</h3><div class="zones">${zones}</div>`;
 }
 
