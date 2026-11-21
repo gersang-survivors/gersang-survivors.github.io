@@ -1,7 +1,8 @@
 // 營地：傭兵永久養成（練級、裝備、轉職、合成、訓練所、市場、倉庫）
 import { GS, M, mercName, itemName, HEROES, SLOTS, SLOT_NAME, combatStats, styleOf, STYLE_NAME, skillEffect, jobTargets, FUSION_RECIPES, itemPrice, sellPrice, canEquip, HIRABLE, hireCost, partySize, levelFromExp, expProgress, MAX_LV } from './rules.js';
 import { portrait } from './render.js';
-import { setOverlay, overlay, startRun, fmtTime } from './main.js';
+import { setOverlay, overlay, startRun, fmtTime, enterTownView } from './main.js';
+import { NPCS } from './town.js';
 
 const SAVE_KEY = 'gersang-survivors-save-v2';
 const EXP = GS.exp;
@@ -28,7 +29,7 @@ export function openNewGame() {
     save = { v: 2, nextUid: 1, roster: [], party: [], silver: 500, items: {}, cleared: 0, runs: 0 };
     save.roster.push(refreshLv({ uid: 0, id: b.dataset.id, exp: 0, equip: {} }));
     const archer = newRec('guU02', M('guU02').lv); save.party.push(archer.uid);
-    persist(); openCamp('go');
+    persist(); enterTownView();
   });
 }
 
@@ -54,11 +55,11 @@ let tab = 'go', selUid = 0;
 export function openCamp(t) {
   if (t) tab = t;
   const h = heroRec();
-  const tabs = [['go', '出發'], ['mercs', '傭兵'], ['fuse', '合成所'], ['hire', '訓練所'], ['market', '市場'], ['store', '倉庫']];
-  setOverlay(`<div class="panel camp"><div class="camphead"><img class="pt sm" src="${portrait(h.id, M(h.id))}"><div><b>${mercName(h.id)}</b> Lv ${h.lv}</div><div class="gold">銀兩 ${money(save.silver)}</div></div>
-    <div class="tabs">${tabs.map(([k, n]) => `<button class="tab ${tab === k ? 'on' : ''}" data-t="${k}">${n}</button>`).join('')}</div>
+  const npc = NPCS.find(n => n.key === tab) || NPCS[0];
+  setOverlay(`<div class="panel camp"><div class="camphead"><img class="pt sm" src="${portrait(h.id, M(h.id))}"><div><b>${mercName(h.id)}</b> Lv ${h.lv}</div><div class="gold">銀兩 ${money(save.silver)}</div><button class="btn small close" id="leaveNpc">離開</button></div>
+    <div class="npcline"><b>${npc.name}</b>：「${npc.line}」</div>
     <div class="tabbody">${({ go: tabGo, mercs: tabMercs, fuse: tabFuse, hire: tabHire, market: tabMarket, store: tabStore })[tab]()}</div></div>`);
-  overlay.querySelectorAll('.tab').forEach(b => b.onclick = () => openCamp(b.dataset.t));
+  document.getElementById('leaveNpc').onclick = () => setOverlay('');
   bind();
 }
 function bind() {
@@ -75,6 +76,7 @@ const ACT = {
   sel: d => { selUid = +d.uid; tab = 'mercs'; openCamp(); },
   equip: d => { const r = save.roster.find(x => x.uid === +d.uid); const old = r.equip[d.slot]; if (old) save.items[old] = (save.items[old] || 0) + 1;
     if (d.item) { r.equip[d.slot] = d.item; if (--save.items[d.item] <= 0) delete save.items[d.item]; } else delete r.equip[d.slot]; persist(); openCamp(); },
+  skill: d => { const r = save.roster.find(x => x.uid === +d.uid); r.skillOff = r.skillOff || []; const i = r.skillOff.indexOf(d.sk); if (i >= 0) r.skillOff.splice(i, 1); else r.skillOff.push(d.sk); persist(); openCamp(); },
   slot: d => { slotPick = slotPick === d.slot ? null : d.slot; openCamp(); },
   job: d => {
     const r = save.roster.find(x => x.uid === +d.uid), j = jobTargets(r.id).find(x => x.to === d.to);
@@ -132,7 +134,8 @@ function tabMercs() {
   const sel = save.roster.find(r => r.uid === selUid) || heroRec(); selUid = sel.uid;
   const list = save.roster.map(r => unitCard(r)).join('');
   const m = M(sel.id), st = combatStats(sel), pr = expProgress(sel.exp);
-  const skills = (m.sk || []).map(s => `<div class="sk"><b>${esc(s.n)}</b> <span class="muted">${esc(s.d || '')}</span></div>`).join('') || '<p class="muted">冇技能</p>';
+  const off = sel.skillOff || [];
+  const skills = (m.sk || []).map(s => `<div class="sk"><button class="chip ${off.includes(s.id) ? 'no' : 'ok'}" data-act="skill" data-uid="${sel.uid}" data-sk="${s.id}">${off.includes(s.id) ? '關' : '自動施放'}</button> <b>${esc(s.n)}</b> <span class="muted">${esc(s.d || '')}</span></div>`).join('') || '<p class="muted">冇技能</p>';
   const slots = SLOTS.map(s => { const it = sel.equip[s]; return `<button class="slot ${slotPick === s ? 'on' : ''}" data-act="slot" data-slot="${s}"><span class="muted">${SLOT_NAME[s]}</span><br>${it ? esc(itemName(it)) : '—'}</button>`; }).join('');
   let pickList = '';
   if (slotPick) {

@@ -75,10 +75,16 @@
   .small { font-size: 11px; }
   .card.hero .pt { width: 72px; height: 99px; }
   .btn[disabled] { opacity: .45; cursor: default; }
+  #townui { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); display: none; gap: 8px; z-index: 5; }
+  #townui button { font-family: inherit; font-size: 16px; font-weight: bold; padding: 10px 16px; border-radius: 6px; border: 2px solid #e0b060; background: #8a2a1a; color: #fff; cursor: pointer; }
+  #townui button:disabled { background: #4a3a22; color: #c8bca0; border-color: #7a6030; }
+  .npcline { background: #1e160c; border-left: 3px solid #ffd84a; padding: 8px 12px; margin: 4px 0 10px; }
+  .camphead .close { margin: 0; min-width: 0; }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
+<div id="townui"></div>
 <div id="overlay"></div>
 <script type="module" src="src/main.js"></script>
 </body>

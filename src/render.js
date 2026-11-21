@@ -1,4 +1,5 @@
 // 原創像素美術：按巨商角色嘅身份、兵器、國籍、屬性即時生成（唔係原作素材）
+import { hiHumanoid, hiCart, hiCreature } from './art.js';
 // Optional local asset pack (assets-local/sprites.json) can override any sprite key.
 
 const cache = new Map();
@@ -168,9 +169,9 @@ export function mercLook(id, m) {
   if (has(/曹鐵西/)) Object.assign(L, { robe: has(/神弓/) ? '#3a6a3a' : '#6a5030', hat: has(/神弓/) ? 'helmet' : 'headband', weapon: has(/獵人|神弓/) ? 'bow' : 'coin', armor: has(/神弓/) ? '#4a5a3a' : null, cape: has(/神弓/) ? '#2a4a2a' : null });
   else if (has(/李明花/)) Object.assign(L, { robe: has(/砲手/) ? '#5a3a6a' : '#e080a0', top: '#f0e0a0', female: true, hat: 'bun', weapon: has(/砲手/) ? 'cannon' : 'coin', cape: has(/大商人|砲手/) ? '#c09040' : null });
   // 名將 / 傳說
-  else if (has(/李舜臣/)) Object.assign(L, { robe: '#1a2a5a', hat: 'admiral', weapon: 'bow', armor: '#2a3a6a', cape: '#a02020' });
-  else if (has(/許浚/)) Object.assign(L, { robe: '#e0e0e8', hat: 'gat', weapon: 'needle' });
-  else if (has(/權慄|宣武功臣/)) Object.assign(L, { robe: '#5a2a1a', hat: 'helmet', helm: '#3a3a3a', weapon: 'sword', armor: has(/覺醒/) ? '#c09020' : '#7a3a20', cape: has(/功臣/) ? '#a02020' : null });
+  else if (has(/李舜臣/)) Object.assign(L, { robe: '#1a2a5a', hat: 'admiral', weapon: 'bow', armor: '#2a3a6a', cape: '#a02020', beard: true });
+  else if (has(/許浚/)) Object.assign(L, { robe: '#e0e0e8', hat: 'gat', weapon: 'needle', beard: true, sash: '#2a4a8a' });
+  else if (has(/權慄|宣武功臣/)) Object.assign(L, { beard: true, robe: '#5a2a1a', hat: 'helmet', helm: '#3a3a3a', weapon: 'sword', armor: has(/覺醒/) ? '#c09020' : '#7a3a20', cape: has(/功臣/) ? '#a02020' : null });
   else if (has(/申砬|諡號忠臣/)) Object.assign(L, { robe: '#2a4a3a', hat: 'helmet', weapon: 'bow', armor: '#3a5a4a', horse: has(/覺醒/) ? '#e8e8e8' : true, cape: has(/忠臣/) ? '#2050a0' : null });
   else if (has(/四溟|西山/)) Object.assign(L, { robe: '#7a6a5a', hat: 'monk', weapon: 'moktak', cape: has(/西山/) ? '#c08030' : null });
   else if (has(/柳城龍/)) Object.assign(L, { robe: '#d8d0c0', hat: 'gat', weapon: 'fan' });
@@ -180,7 +181,7 @@ export function mercLook(id, m) {
   else if (has(/崔茂宣/)) Object.assign(L, { robe: '#5a2a1a', hat: 'gat', weapon: 'cannon', cape: '#c83a20' });
   else if (has(/洪吉童/)) Object.assign(L, { robe: '#e8e8f0', hat: 'gat', weapon: 'fan', cape: '#3a9a6a' });
   // 基礎兵
-  else if (has(/挑夫/)) Object.assign(L, { robe: '#a08a60', hat: 'headband', weapon: 'none', cape: '#6a5030' });
+  else if (has(/挑夫/)) Object.assign(L, { robe: '#a08a60', hat: 'headband', weapon: 'none', cape: '#6a5030', jige: true });
   else if (has(/弓騎兵/)) Object.assign(L, { robe: '#5a7a4a', hat: 'helmet', weapon: 'bow', horse: true });
   else if (has(/弓手/)) Object.assign(L, { robe: '#5a8a4a', hat: 'gat', weapon: 'bow' });
   else if (has(/醫術師/)) Object.assign(L, { robe: '#e8e8f0', hat: 'jeongjagwan', weapon: 'needle' });
@@ -215,13 +216,14 @@ export function sprite(key, build) {
 export function mercSprite(id, m, frame) {
   return sprite(`merc_${id}_${frame}`, () => {
     const L = mercLook(id, m);
-    if (L.creature) return outline(creature(L.creature, frame, L.tint));
-    if (L.cart) return outline(cart(L.cart, frame, L.elem));
-    return outline(humanoid(L, frame));
+    if (L.creature) return hiCreature(L.creature, frame, L.tint);
+    if (L.cart) return hiCart(L.cart, frame, L.elem);
+    return hiHumanoid(L, frame);
   });
 }
-export function monsterSprite(mon, frame) { return sprite(`mon_${mon.id}_${frame}`, () => outline(creature(mon.zh, frame))); }
-export function peddlerSprite(frame) { return sprite(`peddler_${frame}`, () => outline(humanoid({ robe: '#3a7a5a', hat: 'gat', weapon: 'none', cape: '#c0a060' }, frame))); }
+export function monsterSprite(mon, frame) { return sprite(`mon_${mon.id}_${frame}`, () => hiCreature(mon.zh, frame)); }
+export function peddlerSprite(frame) { return sprite(`peddler_${frame}`, () => hiHumanoid({ robe: '#3a7a5a', hat: 'gat', weapon: 'abacus', cape: '#c0a060' }, frame)); }
+export function npcSprite(key, look, frame) { return sprite(`npc_${key}_${frame}`, () => hiHumanoid(look, frame)); }
 export function portrait(id, m) {
   if (LOCAL.on) {
     const f = localFrame(m.rot, m.idl, false, 0, 0, -1);
@@ -230,7 +232,7 @@ export function portrait(id, m) {
   const key = `portrait_${id}`;
   let url = cache.get(key);
   if (!url) {
-    const img = mercSprite(id, m, 0), [c, g] = canvas(img.width * 3, img.height * 3);
+    const img = mercSprite(id, m, 0), k = 3 * (img.pxScale || 1), [c, g] = canvas(img.width * k, img.height * k);
     g.imageSmoothingEnabled = false; g.drawImage(img, 0, 0, c.width, c.height); url = c.toDataURL(); cache.set(key, url);
   }
   return url;

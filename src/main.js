@@ -1,6 +1,7 @@
 import { GS, M, mercName, itemName, RUN_SECONDS, MID_BOSS_AT, combatStats, styleOf, skillEffect, SKILL_CD, enemyStats, TAMEABLE, levelFromExp, partySize, STYLE_NAME } from './rules.js';
 import { drawGround, zoneTheme, mercSprite, monsterSprite, peddlerSprite, loadLocalPack, SCALE, detectLocalArt, localFrame, dirIndex, LOCAL } from './render.js';
 import { save, persist, openCamp, applyRunResult, hasSave, openNewGame } from './camp.js';
+import { town, enterTown, updateTown, drawTown, npcAt } from './town.js';
 
 const cv = document.getElementById('game');
 const ctx = cv.getContext('2d');
@@ -17,6 +18,7 @@ addEventListener('keydown', e => {
   keys.add(e.key.toLowerCase());
   if (game && (e.key === 'Escape' || e.key.toLowerCase() === 'p')) togglePause();
   if (game && game.mode === 'levelup' && ['1', '2', '3'].includes(e.key)) pickChoice(+e.key - 1);
+  if (!game && town.on && town.near && overlay.style.display !== 'flex' && ['e', 'enter', ' '].includes(e.key.toLowerCase())) openCamp(town.near.key);
 });
 addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
 const stick = { active: false, id: null, ox: 0, oy: 0, dx: 0, dy: 0 };
@@ -50,7 +52,7 @@ function makeUnit(rec, isHero) {
   const st = combatStats(rec), m = M(rec.id);
   return { rec, id: rec.id, m, isHero, st, x: rand(-30, 30), y: rand(-30, 30), cd: rand(0, 0.6), face: 1, anim: rand(0, 1), atkFx: 0,
     atkUp: 0, spdUp: 0, skillLv: 0, dash: 0,
-    skills: (m.sk || []).map(s => ({ ...s, fx: skillEffect(s), cd: rand(2, SKILL_CD[skillEffect(s)]) })) };
+    skills: (m.sk || []).filter(s => !(rec.skillOff || []).includes(s.id)).map(s => ({ ...s, fx: skillEffect(s), cd: rand(2, SKILL_CD[skillEffect(s)]) })) };
 }
 
 // ---------------- 巨商原作系統：陣型・精靈・合擊技（數值由 wiki data 轉換） ----------------
@@ -96,7 +98,26 @@ function activeCombos() {
 }
 const STYLE_GROUP = { arrow: 'bow', bullet: 'bow', melee: 'melee', sweep: 'melee', orb: 'magic', needle: 'magic' };
 
+export function enterTownView() {
+  setOverlay(''); town.heroId = save.roster.find(r => r.uid === 0).id;
+  enterTown(save.party.map(uid => save.roster.find(r => r.uid === uid)?.id).filter(Boolean));
+  townUI();
+}
+const tui = document.getElementById('townui');
+function townUI() {
+  tui.innerHTML = `<button id="tuTalk">對話</button><button id="tuMercs">傭兵</button><button id="tuGo">出征</button>`;
+  document.getElementById('tuTalk').onclick = () => town.near && openCamp(town.near.key);
+  document.getElementById('tuMercs').onclick = () => openCamp('mercs');
+  document.getElementById('tuGo').onclick = () => openCamp('go');
+}
+cv.addEventListener('click', e => {
+  if (game || !town.on) return;
+  const n = npcAt(e.clientX + town.x - W / 2, e.clientY + town.y - H / 2);
+  if (n && town.near === n) openCamp(n.key);
+});
+
 export function startRun(zoneIdx) {
+  town.on = false;
   const zone = GS.zones[zoneIdx];
   const heroRec = save.roster.find(r => r.uid === 0);
   const hero = makeUnit(heroRec, true);
@@ -481,13 +502,14 @@ export function endRun(win) {
     ${game.tamed.length ? `<p class="gold">收服：${game.tamed.map(mercName).join('、')}</p>` : ''}
     ${res.unlocked ? `<p class="gold">新地圖開放：${res.unlocked}</p>` : ''}
     <p class="muted">戰利品：${lootList}</p>
-    <button class="btn" id="tocamp">返營地</button></div>`);
-  document.getElementById('tocamp').onclick = () => { game = null; openCamp(); };
+    <button class="btn" id="tocamp">返漢陽</button></div>`);
+  document.getElementById('tocamp').onclick = () => { game = null; enterTownView(); };
 }
 
 // ---------------- render ----------------
 function draw() {
   ctx.fillStyle = '#1a1a1a'; ctx.fillRect(0, 0, W, H);
+  if (!game && town.on) { drawTown(ctx, W, H, blit, label, shadow); drawStick(); return; }
   if (!game) { drawAttract(); return; }
   const g = game, p = g.player, camX = Math.round(p.x - W / 2), camY = Math.round(p.y - H / 2);
   drawGround(ctx, camX, camY, W, H, g.theme);
@@ -525,9 +547,13 @@ function draw() {
   if (g.peddler) edgeArrow(sx(g.peddler.x), sy(g.peddler.y), '#70e090');
   if (g.boss && !g.boss.dead) edgeArrow(sx(g.boss.x), sy(g.boss.y), '#ff5050');
   drawHud();
+  drawStick();
+}
+function drawStick() {
   if (stick.active) { ctx.globalAlpha = 0.35; ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(stick.ox, stick.oy, 50, 0, 7); ctx.fill(); ctx.globalAlpha = 0.6; ctx.beginPath(); ctx.arc(stick.ox + stick.dx * 50, stick.oy + stick.dy * 50, 20, 0, 7); ctx.fill(); ctx.globalAlpha = 1; }
 }
 function blit(img, x, y, face, scale = SCALE) {
+  scale *= img.pxScale || 1;
   const w = img.width * scale, h = img.height * scale;
   ctx.save(); ctx.translate(x, y); if (face < 0) ctx.scale(-1, 1); ctx.drawImage(img, -w / 2, -h + 6, w, h); ctx.restore();
 }
@@ -619,11 +645,20 @@ let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (game && game.mode === 'play') update(dt);
+  else if (!game && town.on && overlay.style.display !== 'flex') {
+    let mx = 0, my = 0;
+    if (keys.has('w') || keys.has('arrowup')) my -= 1; if (keys.has('s') || keys.has('arrowdown')) my += 1;
+    if (keys.has('a') || keys.has('arrowleft')) mx -= 1; if (keys.has('d') || keys.has('arrowright')) mx += 1;
+    if (stick.active) { mx = stick.dx; my = stick.dy; }
+    updateTown(dt, mx, my);
+  }
+  tui.style.display = !game && town.on && overlay.style.display !== 'flex' ? 'flex' : 'none';
+  const tb = document.getElementById('tuTalk'); if (tb) { tb.disabled = !town.near; tb.textContent = town.near ? `對話：${town.near.name}` : '行近 NPC 對話'; }
   if (bannerT > 0) bannerT -= dt;
   draw(); requestAnimationFrame(frame);
 }
 window.__gs = { get game() { return game; }, startRun, update, pickChoice, endRun, get save() { return save; } };
 loadLocalPack().then(n => { if (n) console.log(`本機素材包已載入：${n} 個 sprite`); });
 detectLocalArt().then(on => { if (on) console.log('本機原作素材模式：開'); });
-if (hasSave()) openCamp(); else openNewGame();
+if (hasSave()) enterTownView(); else openNewGame();
 requestAnimationFrame(frame);
