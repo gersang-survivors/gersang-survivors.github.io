@@ -284,7 +284,7 @@ export function drawGround(ctx, camX, camY, w, h, theme) {
 // ---------------- 本機原作素材模式（只限自己部電腦） ----------------
 // 將巨商百科 repo 嘅 rp/、ip/ 兩個資料夾複製入 assets-local/，遊戲就會用原作動畫圖；
 // assets-local/ 已列入 .gitignore，永遠唔會上傳。冇呢兩個資料夾就照用原創像素圖。
-export const LOCAL = { on: false };
+export const LOCAL = { on: false, ok: 0, fail: 0, err: '' };
 const files = new Map(), anims = new Map();
 export async function detectLocalArt() {
   try { const r = await fetch('assets-local/rp/0.json', { method: 'HEAD', cache: 'no-store' }); LOCAL.on = r.ok; } catch { LOCAL.on = false; }
@@ -293,13 +293,15 @@ export async function detectLocalArt() {
 async function decodeWebp(b64) {
   const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
   if (typeof ImageDecoder !== 'undefined') {
-    const dec = new ImageDecoder({ data: bytes, type: 'image/webp' });
-    await dec.tracks.ready; const n = dec.tracks.selectedTrack.frameCount, out = [];
-    for (let i = 0; i < n; i++) {
-      const { image } = await dec.decode({ frameIndex: i });
-      const [c, g] = canvas(image.displayWidth, image.displayHeight); g.drawImage(image, 0, 0); image.close(); out.push(c);
-    }
-    return out;
+    try {
+      const dec = new ImageDecoder({ data: bytes, type: 'image/webp' });
+      await dec.tracks.ready; const n = dec.tracks.selectedTrack.frameCount, out = [];
+      for (let i = 0; i < n; i++) {
+        const { image } = await dec.decode({ frameIndex: i });
+        const [c, g] = canvas(image.displayWidth, image.displayHeight); g.drawImage(image, 0, 0); image.close(); out.push(c);
+      }
+      if (out.length) return out;
+    } catch { /* 有啲手機瀏覽器有 ImageDecoder 但解唔到動畫 WebP：轉用後備方法 */ }
   }
   return splitAnimatedWebp(bytes);
 }
@@ -337,7 +339,8 @@ function loadAnim(dir, id) {
   const file = `${dir}/${id % (dir === 'rp' ? 100 : 40)}.json`;
   let fp = files.get(file);
   if (!fp) { fp = fetch('assets-local/' + file).then(r => r.ok ? r.json() : {}).catch(() => ({})); files.set(file, fp); }
-  fp.then(j => j[id] ? decodeWebp(j[id]) : null).then(fr => anims.set(key, fr || false)).catch(() => anims.set(key, false));
+  fp.then(j => j[id] ? decodeWebp(j[id]) : null).then(fr => { anims.set(key, fr && fr.length ? fr : false); if (fr && fr.length) LOCAL.ok++; else LOCAL.fail++; })
+    .catch(e => { anims.set(key, false); LOCAL.fail++; LOCAL.err = String(e); });
   return null;
 }
 // 8 方向次序（順時針由正面開始）：下、左下、左、左上、上、右上、右、右下

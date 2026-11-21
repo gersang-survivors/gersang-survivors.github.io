@@ -509,7 +509,7 @@ export function endRun(win) {
 // ---------------- render ----------------
 function draw() {
   ctx.fillStyle = '#1a1a1a'; ctx.fillRect(0, 0, W, H);
-  if (!game && town.on) { drawTown(ctx, W, H, blit, label, shadow); drawStick(); return; }
+  if (!game && town.on) { drawTown(ctx, W, H, blit, label, shadow, drawLocal); drawStick(); return; }
   if (!game) { drawAttract(); return; }
   const g = game, p = g.player, camX = Math.round(p.x - W / 2), camY = Math.round(p.y - H / 2);
   drawGround(ctx, camX, camY, W, H, g.theme);

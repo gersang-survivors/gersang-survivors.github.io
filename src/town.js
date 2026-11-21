@@ -1,5 +1,5 @@
 // 主地圖：漢陽城（可以行動，搵 NPC 對話開啟各種功能）
-import { npcSprite, mercSprite, drawGround, zoneTheme } from './render.js';
+import { npcSprite, mercSprite, drawGround, zoneTheme, dirIndex, LOCAL } from './render.js';
 import { M, mercName, CITIES } from './rules.js';
 
 export const NPCS = [
@@ -32,7 +32,8 @@ export function updateTown(dt, mx, my) {
   let lead = town;
   for (const f of town.followers) {
     const dx = lead.x - f.x, dy = lead.y - f.y, d = Math.hypot(dx, dy);
-    if (d > 36) { f.x += dx / d * (d - 36) * Math.min(1, dt * 6); f.y += dy / d * (d - 36) * Math.min(1, dt * 6); f.anim += dt * 2; f.face = dx < 0 ? -1 : 1; }
+    f.moving = d > 40;
+    if (d > 36) { f.x += dx / d * (d - 36) * Math.min(1, dt * 6); f.y += dy / d * (d - 36) * Math.min(1, dt * 6); f.anim += dt * 2; f.face = dx < 0 ? -1 : 1; f.dir = dirIndex(dx, dy); }
     lead = f;
   }
   town.near = activeNpcs().find(n => (n.x - town.x) ** 2 + (n.y + 30 - town.y) ** 2 < 75 * 75) || null;
@@ -57,7 +58,7 @@ function hanok(ctx, x, y, w, sign) {
   ctx.fillStyle = '#ffe08a'; ctx.font = 'bold 15px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(sign, x, y - 88);
 }
 
-export function drawTown(ctx, W, H, blit, label, shadow) {
+export function drawTown(ctx, W, H, blit, label, shadow, drawLocal) {
   const camX = Math.round(town.x - W / 2), camY = Math.round(town.y - H / 2);
   drawGround(ctx, camX, camY, W, H, zoneTheme('漢陽'));
   const sx = x => Math.round(x - camX), sy = y => Math.round(y - camY);
@@ -80,9 +81,10 @@ export function drawTown(ctx, W, H, blit, label, shadow) {
       if (town.near === n) { ctx.fillStyle = '#ffe08a'; ctx.beginPath(); ctx.moveTo(sx(n.x) - 7, sy(n.y) - 78); ctx.lineTo(sx(n.x) + 7, sy(n.y) - 78); ctx.lineTo(sx(n.x), sy(n.y) - 68); ctx.fill(); }
     }]);
   }
-  for (const f of town.followers) { const m = M(f.id); if (m) ents.push([f.y, () => { shadow(sx(f.x), sy(f.y), 10); blit(mercSprite(f.id, m, Math.floor(f.anim * 2) % 2), sx(f.x), sy(f.y), f.face); }]); }
+  for (const f of town.followers) { const m = M(f.id); if (m) ents.push([f.y, () => { shadow(sx(f.x), sy(f.y), 10); if (!drawLocal(m.rot, m.idl, f.moving, f.dir, f.face, sx(f.x), sy(f.y))) blit(mercSprite(f.id, m, Math.floor(f.anim * 2) % 2), sx(f.x), sy(f.y), f.face); }]); }
   ents.push([town.y, () => { const hero = town.heroId; if (!hero) return; shadow(sx(town.x), sy(town.y), 11); blit(mercSprite(hero, M(hero), town.moving ? Math.floor(town.anim * 2) % 2 : 0), sx(town.x), sy(town.y), town.face); label(mercName(hero), sx(town.x), sy(town.y) + 22, '#a0e0ff', 12); }]);
   ents.sort((a, b) => a[0] - b[0]).forEach(e => e[1]());
   label(town.city, 60, 34, '#ffd84a', 20);
+  if (LOCAL.on) label(`原作素材模式：開（已載入 ${LOCAL.ok}${LOCAL.fail ? `，失敗 ${LOCAL.fail}` : ''}）`, W - 150, 34, LOCAL.fail && !LOCAL.ok ? '#ff9070' : '#a0e0a0', 12);
   return { camX, camY };
 }
