@@ -25,7 +25,7 @@ const money = n => Math.round(n).toLocaleString();
 export function openNewGame() {
   setOverlay(`<div class="panel title"><h1>巨商 Survivors</h1><p class="sub">GERSANG SURVIVORS</p>
     <p class="story">十六世紀末嘅朝鮮。商路上山賊橫行、妖獸出沒。<br>揀一位主角，招募傭兵、轉職合成，由小商人行到「巨商」。</p>
-    <div class="cards">${HEROES.map(id => `<button class="card hero" data-id="${id}"><img class="pt" src="${portrait(id, M(id))}"><div class="ct">${mercName(id)}</div><div class="cd">${M(id).sex === 'F' || /明花/.test(mercName(id)) ? '轉職路線：大商人 → 砲手' : '轉職路線：獵人 → 神弓'}</div></button>`).join('')}</div>
+    <div class="cards">${HEROES.map(id => `<button class="card hero" data-id="${id}"><img class="pt" data-pid="${id}" src="${portrait(id, M(id))}"><div class="ct">${mercName(id)}</div><div class="cd">${M(id).sex === 'F' || /明花/.test(mercName(id)) ? '轉職路線：大商人 → 砲手' : '轉職路線：獵人 → 神弓'}</div></button>`).join('')}</div>
     <p class="muted">WASD / 方向鍵移動 ・ 手機拖動畫面 ・ P 暫停<br>資料來源：巨商全能百科（非官方同人作品）</p></div>`);
   overlay.querySelectorAll('.card').forEach(b => b.onclick = () => {
     save = migrate({ v: 2, nextUid: 1, roster: [], party: [], silver: 500, items: {}, cleared: 0, runs: 0 });
@@ -62,7 +62,7 @@ export function openCamp(t) {
   if (t) tab = t;
   const h = heroRec();
   const npc = NPCS.find(n => n.key === tab) || NPCS[0];
-  setOverlay(`<div class="panel camp"><div class="camphead"><img class="pt sm" src="${portrait(h.id, M(h.id))}"><div><b>${mercName(h.id)}</b> Lv ${h.lv}</div><div class="gold">銀兩 ${money(save.silver)}</div><button class="btn small close" id="leaveNpc">離開</button></div>
+  setOverlay(`<div class="panel camp"><div class="camphead"><img class="pt sm" data-pid="${h.id}" src="${portrait(h.id, M(h.id))}"><div><b>${mercName(h.id)}</b> Lv ${h.lv}</div><div class="gold">銀兩 ${money(save.silver)}</div><button class="btn small close" id="leaveNpc">離開</button></div>
     <div class="npcline"><b>${npc.name}</b>：「${npc.line}」</div>
     <div class="tabbody">${({ go: tabGo, mercs: tabMercs, fuse: tabFuse, hire: tabHire, market: tabMarket, store: tabStore })[tab]()}</div></div>`);
   document.getElementById('leaveNpc').onclick = () => setOverlay('');
@@ -123,7 +123,7 @@ function itemReq(items) { return items.map(([i, q]) => `<span class="chip ${(sav
 
 function unitCard(r, extra = '') {
   const st = combatStats(r), m = M(r.id);
-  return `<div class="unit ${m.legend ? 'legend' : ''}" data-act="sel" data-uid="${r.uid}"><img class="pt" src="${portrait(r.id, m)}"><div class="un">${esc(mercName(r.id))}</div><div class="ul">Lv ${r.lv}</div><div class="us">${STYLE_NAME[st.style].split('・')[0]}${st.style !== 'porter' ? ` ${Math.round(st.dmg)}` : ''}</div>${extra}</div>`;
+  return `<div class="unit ${m.legend ? 'legend' : ''}" data-act="sel" data-uid="${r.uid}"><img class="pt" data-pid="${r.id}" src="${portrait(r.id, m)}"><div class="un">${esc(mercName(r.id))}</div><div class="ul">Lv ${r.lv}</div><div class="us">${STYLE_NAME[st.style].split('・')[0]}${st.style !== 'porter' ? ` ${Math.round(st.dmg)}` : ''}</div>${extra}</div>`;
 }
 
 // 朝鮮地圖（經緯度投影；輪廓係簡化示意）
@@ -143,7 +143,7 @@ function tabGo() {
     return `<button class="zone" data-act="route" data-r="${r.i}"><div class="ct">${esc(cur)} → ${esc(to)}</div><div class="cs">經 ${esc(z.zh)}</div><div class="cd">${esc(z.reg.map(m => m.zh).join('、'))}</div><div class="cs">首領：${esc(z.boss.map(m => m.zh).join('、'))}</div></button>`; }).join('');
   const roster = save.roster.filter(r => r.uid !== 0).map(r => {
     const on = save.party.includes(r.uid);
-    return `<div class="pick ${on ? 'on' : ''}" data-act="party" data-uid="${r.uid}"><img class="pt sm" src="${portrait(r.id, M(r.id))}"><span>${esc(mercName(r.id))}</span><span class="muted">Lv ${r.lv}</span></div>`;
+    return `<div class="pick ${on ? 'on' : ''}" data-act="party" data-uid="${r.uid}"><img class="pt sm" data-pid="${r.id}" src="${portrait(r.id, M(r.id))}"><span>${esc(mercName(r.id))}</span><span class="muted">Lv ${r.lv}</span></div>`;
   }).join('') || '<p class="muted">未有傭兵，去訓練所招募。</p>';
   const cap = carryCap(partyRecs()), wt = cargoWeight(save.cargo);
   const cargo = Object.entries(save.cargo).map(([id, c]) => `${esc(GOODS[id]?.zh || id)} ×${c.n}`).join('、') || '（冇）';
@@ -168,11 +168,11 @@ function tabMercs() {
   }
   const jobs = jobTargets(sel.id).map(j => {
     const ok = sel.lv >= j.lv && save.silver >= j.cost && hasItems(j.items);
-    return `<div class="job"><img class="pt sm" src="${portrait(j.to, M(j.to))}"><div><b>${esc(mercName(j.to))}</b> <span class="muted">需要 Lv ${j.lv} ・ ${money(j.cost)} 兩</span><div>${itemReq(j.items)}</div></div><button class="btn small" data-act="job" data-uid="${sel.uid}" data-to="${j.to}" ${ok ? '' : 'disabled'}>轉職</button></div>`;
+    return `<div class="job"><img class="pt sm" data-pid="${j.to}" src="${portrait(j.to, M(j.to))}"><div><b>${esc(mercName(j.to))}</b> <span class="muted">需要 Lv ${j.lv} ・ ${money(j.cost)} 兩</span><div>${itemReq(j.items)}</div></div><button class="btn small" data-act="job" data-uid="${sel.uid}" data-to="${j.to}" ${ok ? '' : 'disabled'}>轉職</button></div>`;
   }).join('');
   const usedIn = FUSION_RECIPES.filter(rc => rc.mercs.includes(sel.id)).map(rc => `<span class="chip">${rc.kind}→${esc(mercName(rc.out))}</span>`).join('');
   return `<div class="mercgrid">${list}</div>
-    <div class="detail"><div class="dhead"><img class="pt" src="${portrait(sel.id, m)}"><div><h3>${esc(mercName(sel.id))} <span class="muted">${esc(m.ko || '')}</span></h3>
+    <div class="detail"><div class="dhead"><img class="pt" data-pid="${sel.id}" src="${portrait(sel.id, m)}"><div><h3>${esc(mercName(sel.id))} <span class="muted">${esc(m.ko || '')}</span></h3>
       <div>Lv ${sel.lv} <span class="muted">（${money(pr.cur)}/${money(pr.need)}）</span></div><div class="bar"><i style="width:${Math.min(100, pr.cur / pr.need * 100)}%"></i></div>
       <div class="muted">${STYLE_NAME[st.style]}${m.wt ? ` ・ 兵器：${esc(m.wt)}` : ''}${m.el ? ` ・ ${esc(m.el)}屬性` : ''}</div></div></div>
       <p class="muted">${esc(m.desc)}</p>
@@ -187,7 +187,7 @@ function tabMercs() {
 function tabFuse() {
   return `<p class="muted">巨商原版合成配方（材料數量已按比例縮減）。標住「未開放」嘅需要其他國傭兵，之後版本加入。</p>` + FUSION_RECIPES.map((rc, i) => {
     const picks = fusionPicks(rc), ok = picks && hasItems(rc.items);
-    return `<div class="recipe ${rc.locked ? 'locked' : ''}"><img class="pt" src="${portrait(rc.out, M(rc.out))}"><div><b>${esc(mercName(rc.out))}</b> <span class="chip">${rc.kind}</span>${M(rc.out).legend ? '<span class="chip gold">傳說</span>' : ''}
+    return `<div class="recipe ${rc.locked ? 'locked' : ''}"><img class="pt" data-pid="${rc.out}" src="${portrait(rc.out, M(rc.out))}"><div><b>${esc(mercName(rc.out))}</b> <span class="chip">${rc.kind}</span>${M(rc.out).legend ? '<span class="chip gold">傳說</span>' : ''}
       <div>${rc.mercs.map(id => { const own = save.roster.some(r => r.id === id && r.uid !== 0); return `<span class="chip ${GS.mercs[id] ? (own ? 'ok' : 'no') : 'lock'}">${esc(mercName(id))}${GS.mercs[id] ? '' : '（未開放）'}</span>`; }).join(' + ')}</div>
       <div>${itemReq(rc.items)}</div></div><button class="btn small" data-act="fuse" data-i="${i}" ${ok ? '' : 'disabled'}>${rc.kind}</button></div>`;
   }).join('');
@@ -198,7 +198,7 @@ function tabHire() {
   return `<p class="muted">朝鮮訓練所。主角等級要夠先招募到（需要等級 = 傭兵等級一半）。招募後傭兵由佢嘅原始等級開始。</p><div class="mercgrid">` + HIRABLE.map(id => {
     const m = M(id), need = Math.ceil((m.lv || 1) / 2), c = hireCost(id), ok = lv >= need && save.silver >= c;
     const st = combatStats({ id, lv: m.lv || 1, equip: {} });
-    return `<div class="unit"><img class="pt" src="${portrait(id, m)}"><div class="un">${esc(m.zh)}</div><div class="ul">Lv ${m.lv}</div><div class="us">${STYLE_NAME[st.style].split('・')[0]}</div><div class="muted small">${esc(m.desc).slice(0, 40)}</div>
+    return `<div class="unit"><img class="pt" data-pid="${id}" src="${portrait(id, m)}"><div class="un">${esc(m.zh)}</div><div class="ul">Lv ${m.lv}</div><div class="us">${STYLE_NAME[st.style].split('・')[0]}</div><div class="muted small">${esc(m.desc).slice(0, 40)}</div>
       <button class="btn small" data-act="hire" data-id="${id}" ${ok ? '' : 'disabled'}>${lv < need ? `主角 Lv ${need}` : `${money(c)} 兩`}</button></div>`;
   }).join('') + `</div><p class="muted">怪物傭兵（石爺爺、白虎、九尾狐…）要喺地圖打怪時「收服」。</p>`;
 }

@@ -339,10 +339,21 @@ function loadAnim(dir, id) {
   const file = `${dir}/${id % (dir === 'rp' ? 100 : 40)}.json`;
   let fp = files.get(file);
   if (!fp) { fp = fetch('assets-local/' + file).then(r => r.ok ? r.json() : {}).catch(() => ({})); files.set(file, fp); }
-  fp.then(j => j[id] ? decodeWebp(j[id]) : null).then(fr => { anims.set(key, fr && fr.length ? fr : false); if (fr && fr.length) LOCAL.ok++; else LOCAL.fail++; })
+  fp.then(j => j[id] ? decodeWebp(j[id]) : null).then(fr => { anims.set(key, fr && fr.length ? fr : false); if (fr && fr.length) { LOCAL.ok++; schedulePortraitRefresh(); } else LOCAL.fail++; })
     .catch(e => { anims.set(key, false); LOCAL.fail++; LOCAL.err = String(e); });
   return null;
 }
+// 原圖載入完之後，將介面入面嘅頭像換做原圖（唔重畫成個介面，保留捲動位置）
+let refreshT = 0;
+function schedulePortraitRefresh() {
+  if (refreshT) return;
+  refreshT = setTimeout(() => {
+    refreshT = 0;
+    for (const img of document.querySelectorAll('img[data-pid]')) { const id = img.dataset.pid, m = portraitData(id); if (!m) continue; const u = portrait(id, m); if (img.src !== u) img.src = u; }
+  }, 250);
+}
+let portraitData = () => null;
+export function setPortraitData(fn) { portraitData = fn; }
 // 8 方向次序（順時針由正面開始）：下、左下、左、左上、上、右上、右、右下
 export function dirIndex(vx, vy) { const deg = Math.atan2(vy, vx) * 180 / Math.PI; return ((Math.round((deg - 90) / 45) % 8) + 8) % 8; }
 // returns {img, flip} or null

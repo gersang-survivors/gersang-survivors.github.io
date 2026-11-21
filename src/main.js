@@ -1,5 +1,5 @@
 import { GS, M, mercName, itemName, RUN_SECONDS, MID_BOSS_AT, combatStats, styleOf, skillEffect, SKILL_CD, enemyStats, TAMEABLE, levelFromExp, partySize, STYLE_NAME } from './rules.js';
-import { drawGround, zoneTheme, mercSprite, monsterSprite, peddlerSprite, loadLocalPack, SCALE, detectLocalArt, localFrame, dirIndex, LOCAL } from './render.js';
+import { drawGround, zoneTheme, mercSprite, monsterSprite, peddlerSprite, loadLocalPack, SCALE, detectLocalArt, localFrame, dirIndex, LOCAL, setPortraitData } from './render.js';
 import { save, persist, openCamp, applyRunResult, hasSave, openNewGame } from './camp.js';
 import { town, enterTown, updateTown, drawTown, npcAt } from './town.js';
 
@@ -660,5 +660,6 @@ function frame(now) {
 window.__gs = { get game() { return game; }, startRun, update, pickChoice, endRun, get save() { return save; } };
 loadLocalPack().then(n => { if (n) console.log(`本機素材包已載入：${n} 個 sprite`); });
 detectLocalArt().then(on => { if (on) console.log('本機原作素材模式：開'); });
+setPortraitData(id => M(id));
 if (hasSave()) enterTownView(); else openNewGame();
 requestAnimationFrame(frame);
